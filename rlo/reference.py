@@ -1,4 +1,4 @@
-"""Reference solutions: exact small DP, or optional feasible OR-Tools routes."""
+"""Auditable route-based reference solutions; every cost is independently checked."""
 
 import json
 from pathlib import Path
@@ -8,19 +8,68 @@ from .problem import distances, validate
 
 
 def load(path, cases):
-    """Load frozen references after checking every instance matches its seeded split."""
-    from .data import instances as make_instances
-    records = json.loads(Path(path).read_text())
-    if len(records["lengths"]) < len(cases):
-        raise ValueError("not enough reference entries")
-    expected = make_instances(records["n"], records["split"], len(cases))
-    if any(fingerprint(a) != fingerprint(b) for a, b in zip(cases, expected)):
+    """Load frozen routes; reject archived cost-only files."""
+    record = json.loads(Path(path).read_text())
+    if "routes" not in record:
+        raise ValueError("cost-only archive cannot be validated: regenerate and freeze routes")
+    routes, ids, costs = (record[k] for k in ("routes", "fingerprints", "costs"))
+    if not len(routes) == len(ids) == len(costs) or len(routes) < len(cases):
+        raise ValueError("reference entry count mismatch")
+    if any(fingerprint(inst) != ids[i] for i, inst in enumerate(cases)):
         raise ValueError("reference does not match these instances")
-    return records["lengths"][:len(cases)], records["method"]
+    measured = [validate(inst, routes[i]) for i, inst in enumerate(cases)]
+    if not np.allclose(measured, costs[:len(cases)], atol=1e-9, rtol=0):
+        raise ValueError("stored reference costs disagree with routes")
+    return measured, record["method"]
+
+
+def save(path, cases, routes, method, n, split, *, overwrite=False):
+    """Freeze Euclidean reference costs together with actual feasible tours."""
+    from .data import instances
+    path = Path(path)
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} exists; use overwrite=True to replace it")
+    if len(routes) != len(cases) or any(
+        fingerprint(a) != fingerprint(b)
+        for a, b in zip(cases, instances(n, split, len(cases)))
+    ):
+        raise ValueError("routes and cases must match the seeded split")
+    record = {"n": n, "split": split, "method": method,
+              "fingerprints": [fingerprint(x) for x in cases],
+              "routes": [list(map(int, tour)) for tour in routes],
+              "costs": [validate(inst, tour) for inst, tour in zip(cases, routes)]}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + "\n")
+
+
+def pyvrp_solver(instance, seconds=3, seed=0):
+    """Optional PyVRP 0.14.x solver; integer costs for search, Euclidean for scoring."""
+    from pyvrp import Model
+    from pyvrp.stop import MaxRuntime
+
+    n = len(instance["demands"]) - 1
+    model = Model()
+    model.add_depot(location=model.add_location(*map(float, instance["coords"][0])))
+    model.add_vehicle_type(num_available=n, capacity=int(instance["capacity"]))
+    for xy, demand in zip(instance["coords"][1:], instance["demands"][1:]):
+        model.add_client(location=model.add_location(*map(float, xy)), delivery=int(demand))
+    d = np.rint(distances(instance) * 1_000_000).astype(int)
+    for i, frm in enumerate(model.locations):
+        for j, to in enumerate(model.locations):
+            model.add_edge(frm, to, distance=int(d[i, j]))
+    result = model.solve(stop=MaxRuntime(seconds), seed=seed, display=False)
+    if not result.is_feasible():
+        raise ValueError("PyVRP did not find a feasible route")
+    tour = [0]
+    for route in result.best.routes():
+        tour.extend(int(act.idx) + 1 for act in route if act.is_client())
+        tour.append(0)
+    validate(instance, tour)
+    return tour
 
 
 def ortools(instance, seconds=10):
-    """Feasible heuristic reference (never labeled exact). Requires pip install ortools."""
+    """Optional heuristic OR-Tools reference, with recomputed Euclidean cost."""
     from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
     d = np.rint(distances(instance) * 1_000_000).astype(np.int64)
@@ -52,16 +101,3 @@ def ortools(instance, seconds=10):
             tour.extend(route + [0])
     validate(instance, tour)
     return tour
-
-
-def save(path, cases, tours, method, n, split):
-    """Freeze references for a complete deterministic split (one tour per case)."""
-    from .data import instances as make_instances
-    if len(tours) != len(cases) or any(
-        fingerprint(a) != fingerprint(b)
-        for a, b in zip(cases, make_instances(n, split, len(cases)))
-    ):
-        raise ValueError("routes and cases must match the requested seeded split")
-    costs = [validate(inst, route) for inst, route in zip(cases, tours)]
-    Path(path).write_text(json.dumps({"method": method, "n": n, "split": split,
-                                      "lengths": costs}, indent=2) + "\n")
