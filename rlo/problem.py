@@ -15,8 +15,11 @@ def generate(n, rng, *, capacity_factor=1.0, demand_max=10):
     demands = np.zeros(n + 1, dtype=np.float32)
     demands[1:] = rng.integers(1, demand_max + 1, n)
     typical_load = (demand_max + 1) / 2 * n / 3.5
-    capacity = max(demand_max, round(typical_load * capacity_factor))
+    # Preserve the original generator exactly when called with default parameters.
+    floor = 10 if demand_max == 10 and capacity_factor == 1.0 else int(demands.max())
+    capacity = max(floor, round(typical_load * capacity_factor))
     return {"coords": coords, "demands": demands, "capacity": capacity}
+
 
 def distances(instance):
     p = instance["coords"].astype(np.float64)

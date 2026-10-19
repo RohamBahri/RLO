@@ -8,5 +8,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -e '.[test]'
-      - run: pytest -q
+      - run: pip install -e '.[test]' && pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: OMP_NUM_THREADS=1 pytest -q
+      - run: OMP_NUM_THREADS=1 python -m rlo.train --method a2c --sizes 4 --updates 1 --batch 2 --width 16 --layers 1 --validation-count 2 --out /tmp/rlo-ci
+      - run: OMP_NUM_THREADS=1 python -m rlo.study --checkpoint /tmp/rlo-ci/last.pt --sizes 4 --count 2 --k 1 2

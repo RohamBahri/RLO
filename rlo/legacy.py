@@ -76,3 +76,26 @@ class MVP5Policy:
             if visited[1:].all() and current == 0:
                 break
         return tour
+
+    @torch.no_grad()
+    def sample(self, instance, *, seed=0, temperature=1.0):
+        """Stochastic decoding from the original *unmasked* model (may be infeasible)."""
+        if temperature <= 0:
+            raise ValueError("temperature must be positive")
+        generator = torch.Generator(device=self.device).manual_seed(int(seed))
+        n = len(instance["demands"])
+        visited = np.zeros(n, dtype=bool)
+        current, load, tour = 0, 0.0, [0]
+        dist = torch.tensor(distances(instance), dtype=torch.float32, device=self.device)[None]
+        for _ in range(5 * n):
+            f = torch.tensor(features(instance, visited, current, load), device=self.device)[None]
+            logits = self.model(f, torch.tensor([current], device=self.device), dist)
+            probs = torch.softmax(logits / temperature, dim=-1)
+            action = int(torch.multinomial(probs, 1, generator=generator).item())
+            tour.append(action)
+            load = 0 if action == 0 else load + float(instance["demands"][action])
+            visited[action] = action != 0 or visited[action]
+            current = action
+            if visited[1:].all() and current == 0:
+                break
+        return tour
