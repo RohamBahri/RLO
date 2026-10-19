@@ -29,9 +29,10 @@ class Attention(nn.Module):
 
 
 class Policy(nn.Module):
-    def __init__(self, width=64, layers=2, distance_bias=True, logit_clip=10.0):
+    def __init__(self, width=64, layers=2, distance_bias=True, logit_clip=10.0, glimpse=False):
         super().__init__()
         self.width, self.distance_bias, self.logit_clip = width, distance_bias, logit_clip
+        self.glimpse = glimpse
         self.embed = nn.Linear(4, width)
         self.encoder = nn.ModuleList([Attention(width) for _ in range(layers)])
         self.dynamic = nn.Linear(2, width)
@@ -39,6 +40,11 @@ class Policy(nn.Module):
         self.query = nn.Linear(3 * width, width)
         self.key = nn.Linear(width, width)
         self.value = nn.Sequential(nn.Linear(3 * width, width), nn.ReLU(), nn.Linear(width, 1))
+        if glimpse:
+            self.glimpse_q = nn.Linear(width, width)
+            self.glimpse_k = nn.Linear(width, width)
+            self.glimpse_v = nn.Linear(width, width)
+            self.glimpse_out = nn.Linear(width, width)
 
     def encode(self, nodes, dist):
         """Run attention just once per instance; node features 0:4 never change."""
@@ -53,7 +59,20 @@ class Policy(nn.Module):
         current = nodes[..., 5].argmax(dim=1)
         here = h[torch.arange(len(h), device=h.device), current]
         context = torch.cat([here, h.mean(1), self.global_embed(global_features)], dim=-1)
-        scores = (self.key(h) @ self.query(context).unsqueeze(-1)).squeeze(-1) / math.sqrt(self.width)
+        q = self.query(context)
+        if self.glimpse:
+            # One masked, multi-head query over currently legal nodes.
+            batch, nodes, width = h.shape
+            heads = self.encoder[0].heads if self.encoder else 4
+            d = width // heads
+            query = self.glimpse_q(q).reshape(batch, heads, d)
+            keys = self.glimpse_k(h).reshape(batch, nodes, heads, d).transpose(1, 2)
+            values = self.glimpse_v(h).reshape(batch, nodes, heads, d).transpose(1, 2)
+            attention = (query[:, :, None] * keys).sum(-1) / math.sqrt(d)
+            attention = attention.masked_fill(~mask[:, None], -1e9).softmax(-1)
+            look = (attention[..., None] * values).sum(2).reshape(batch, width)
+            q = q + self.glimpse_out(look)
+        scores = (self.key(h) @ q.unsqueeze(-1)).squeeze(-1) / math.sqrt(self.width)
         if self.logit_clip is not None:
             scores = self.logit_clip * torch.tanh(scores / self.logit_clip)
         return scores.masked_fill(~mask, -1e9), self.value(context).squeeze(-1)

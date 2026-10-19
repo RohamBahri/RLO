@@ -44,3 +44,19 @@ python -m rlo.mbpi --checkpoint results/a2c_0/last.pt --n 10 --diagnostic --upda
 The core environment, exact small-instance solvers and benchmarks need only NumPy. Training uses **PyTorch** (CUDA on NVIDIA, MPS on Apple Silicon, CPU otherwise) to keep one verifiable training implementation; MLX-only training is not claimed. Historical MVP5 is a separate optional PyTorch adapter. Route-verified larger reference sets are not yet committed; generate them via `python -m scripts.freeze_references --n 20 --split validation --method pyvrp` after `pip install -e '.[pyvrp]'`. Archived cost-only references are historical, not exact or route-verifiable.
 
 **Group A fairness:** The policy uses static node attention **once per episode** and a light state decoder, inverse size `1/n`, logit clipping at ±10, masked actions, a per-size REINFORCE baseline, a *frozen* rollout baseline promoted only on an independent training pool, and all-`n` POMO starts by default. Default validation is 256 instances per size. The sweep is an **initial screening**, not a convergence result: extend the strongest models until learning curves flatten within predefined compute limits. Use the untouched `test` split only after choosing settings. Previous `rlo.train` v1 checkpoints are incompatible with the new v2 architecture; archived MVP5 remains available through `--legacy`.
+
+### Before the Group A sweep: architecture pilot
+
+The decoder-glimpse hypothesis is not yet validated. Run identical experiments with and without `--glimpse` (default: off):
+
+```bash
+python -m scripts.sweep --methods a2c pomo --sizes 10 --widths 64 128 \
+  --architectures plain glimpse --lrs 0.0003 --seeds 0 \
+  --max-transitions 5000000 --out results/arch_n10
+python -m scripts.sweep --methods a2c pomo --sizes 20 --widths 64 128 \
+  --architectures plain glimpse --lrs 0.0003 --seeds 0 \
+  --max-transitions 5000000 --out results/arch_n20
+python -m scripts.curves results/arch_n10 --out results/plots_n10
+```
+
+Validation always records single-start greedy; POMO also records all-start greedy. For a **fair all-start primary** across all methods, pass both `--validation-multistart --selection-metric multistart` (more costly). Architecture should only be frozen after confirming any difference across seeds. Group A LR screening defaults to **10M transitions**, not 1M.
