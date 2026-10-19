@@ -20,3 +20,18 @@ def fingerprint(instance):
     d = np.asarray(instance["demands"], dtype="<f4")
     q = np.asarray([instance["capacity"]], dtype="<i8")
     return hashlib.sha256(c.tobytes() + d.tobytes() + q.tobytes()).hexdigest()
+
+def training_stream(seed=0, *, sizes=(10, 15, 20, 30),
+                    capacity_factors=(0.75, 1.25), demand_maxes=(8, 10, 12)):
+    """Endless, reproducible *unlabeled* experiences across sizes and settings.
+
+    Every iteration generates a new problem, never a solution or teacher label.
+    Fixed legacy/validation/test streams are separate from this training stream.
+    """
+    if not sizes or not demand_maxes or not (0 < capacity_factors[0] <= capacity_factors[1]):
+        raise ValueError("invalid training instance ranges")
+    rng = np.random.default_rng(seed)
+    while True:
+        yield generate(int(rng.choice(sizes)), rng,
+                       capacity_factor=float(rng.uniform(*capacity_factors)),
+                       demand_max=int(rng.choice(demand_maxes)))
