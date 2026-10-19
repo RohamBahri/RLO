@@ -1,27 +1,13 @@
-"""Tiny optional backend selector for future model code; core CVRP is NumPy-only."""
+"""Current training uses one PyTorch implementation (CUDA, MPS, or CPU).
 
-import sys
+MLX availability is not treated as MLX *training* support. Add a separate
+verified backend only if the research benefit justifies the duplication.
+"""
 
 
-def choose(name="auto"):
-    if name == "auto":
-        if sys.platform == "darwin":
-            try:
-                import mlx.core  # noqa: F401
-                return "mlx"
-            except ImportError:
-                pass
-        try:
-            import torch
-            if torch.cuda.is_available():
-                return "torch"
-        except ImportError:
-            pass
+def choose():
+    try:
+        from .learning import device_auto
+        return "torch:" + device_auto()
+    except ImportError:
         return "numpy"
-    if name == "mlx":
-        import mlx.core  # noqa: F401
-    elif name == "torch":
-        import torch  # noqa: F401
-    elif name != "numpy":
-        raise ValueError("backend must be auto, mlx, torch, or numpy")
-    return name
