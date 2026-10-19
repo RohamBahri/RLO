@@ -1,4 +1,4 @@
-# CVRP model and experiment protocol · frozen v1 (October 2026)
+# CVRP model and experiment protocol · frozen v2 (October 2026)
 
 ## Mathematical problem
 
@@ -16,17 +16,17 @@ Each transition has deterministic reward r=−||x_c−x_a||₂ and discount γ=1
 
 ## Observations and architecture
 
-Per node, in this order: **x, y, q/Q, is_depot, visited, is_current** (6 sensors). Two global sensors, stored once: **ℓ/Q and n**. Pairwise attention bias uses **raw Euclidean distance** with no √2 rescaling. No customer-index embeddings, positional encoding, or identifier-dependent operations. Self-attention and symmetric pooling make the policy permutation-equivariant; test this property directly. Fixed node features in the old MVP5 PyTorch adapter are historical only and must not be mixed with the new architecture.
+Per node, in this order: **x, y, q/Q, is_depot, visited, is_current** (6 sensors). Two global sensors, stored once: **ℓ/Q and 1/n** (inverse size avoids raw extrapolation in the global size input). Pairwise attention bias uses **raw Euclidean distance** with no √2 rescaling. No customer-index embeddings, positional encoding, or identifier-dependent operations. Self-attention and symmetric pooling make the policy permutation-equivariant; test this property directly. **Encode once:** static features (x, y, q/Q, is_depot) go through the transformer once per episode; the dynamic flags (visited, is_current) are added by a small decoder at each decision. The global features enter only the decoder. Per-layer attention distance bias is a **learned scalar times raw Euclidean distance**, not MVP5's distance MLP. Clip legal logits with **10 tanh(logit/10)**, then mask illegal actions. Dynamic re-encoding is a potential Group B ablation, not Group A's default. Fixed node features in the old MVP5 PyTorch adapter are historical only and must not be mixed with the new architecture.
 
 One size per batch, no padding. Model and training can support different sizes by taking different same-sized batches. Capacity is initially the only constraint module, providing legality, load update, and features. New constraint types may require additional state and observation dimensions.
 
 ## Experimental protocol
 
-**Group A:** moving-average REINFORCE, greedy-rollout-baseline REINFORCE, A2C-TD(λ), POMO-style policy gradients. One shared architecture and masked environment. LR sweep *separately* for each method; three or more seeds; record curves versus total transitions and wall time; extend the top two toward a predeclared validation plateau or compute cap.
+**Group A:** per-size moving-average REINFORCE, **frozen rollout-baseline** REINFORCE (paired promotion tests on a separate fixed *training* pool; not self-critical/SCST), A2C-TD(λ), and POMO-style policy gradients with **all n forced customer starts** by default (use `--starts k` only as an explicit POMO-k ablation). One shared architecture and masked environment. LR sweep *separately* for each method; three or more seeds; record curves versus total transitions (including rollout baselines and forced moves) and wall time; use transition budgets, not equal update counts. Default validation count is 256 per size. The rollout baseline promotion pool is separate from validation/test; its greedy checks are counted as training compute. Extend the top two toward a predeclared validation plateau or compute cap. Historical v1 checkpoints are incompatible with the v2 encoder and must not be compared as if they used identical architectures.
 
 **Group B:** ablate distance bias, temperature annealing, single/mixed-size training, capacity/demand diversity, one factor at a time. Masking stays on; historical unmasked methods are not directly comparable.
 
-**Groups C/D:** same-distribution new instances, unseen intermediate and larger sizes, parameter shifts; greedy and seeded best-of-K cost-versus-inference-compute curves. Historical MVP5 is diagnostic only; report feasibility independently. Save all settings, seeds, version/commit identifiers, per-instance results and train/evaluation time. Validation is for selection; `test` is used only after configurations are frozen.
+**Groups C/D:** same-distribution new instances, unseen intermediate and larger sizes, parameter shifts; greedy, seeded best-of-K sampling, and all-start greedy multistart cost-versus-inference-compute curves. Historical MVP5 is diagnostic only; report feasibility independently. Save all settings, seeds, version/commit identifiers, per-instance results and train/evaluation time. Validation is for selection; `test` is used only after configurations are frozen.
 
 **MBPI:** after Group A anchors, use rollout Q estimates under a *declared continuation policy*, with KL-constrained policy improvement from the policy's own simulated returns. n≤10 exact residual action values are **diagnostics**, never training labels. Compare against the strongest Group A method with equal transitions and time; include search-rollout costs.
 

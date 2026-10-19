@@ -86,7 +86,7 @@ class CVRPEnv:
         obs[0, 3] = 1
         obs[:, 4] = self.visited
         obs[self.current, 5] = 1
-        global_features = np.array([*self.capacity.features(self.load), nodes - 1], dtype=np.float32)
+        global_features = np.array([*self.capacity.features(self.load), 1.0 / (nodes - 1)], dtype=np.float32)
         return obs, global_features, self.dist.astype(np.float32), self.legal()
 
     def finish(self):
