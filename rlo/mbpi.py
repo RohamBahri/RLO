@@ -145,10 +145,10 @@ def main():
             log.write(json.dumps(record) + "\n")
             log.flush()
             print(json.dumps(record), flush=True)
-    torch.save({"model": model.state_dict(), "architecture_version": 2, "architecture":
+    torch.save({"model": model.state_dict(), "architecture_version": 3 if model.glimpse else 2, "architecture":
                 {"width": model.width, "layers": len(model.encoder),
                  "distance_bias": model.distance_bias,
-                 "logit_clip": model.logit_clip}}, out / "last.pt")
+                 "logit_clip": model.logit_clip, "glimpse": model.glimpse}}, out / "last.pt")
 
 
 if __name__ == "__main__":

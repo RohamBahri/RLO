@@ -17,8 +17,8 @@ from .solvers import clarke_wright, nearest_neighbor
 def model_from_checkpoint(path, device="auto"):
     device = device_auto() if device == "auto" else device
     state = torch.load(path, map_location=device, weights_only=True)
-    if state.get("architecture_version") != 2:
-        raise ValueError("obsolete experimental checkpoint: train again with v2 static encoder")
+    if state.get("architecture_version") not in (2, 3):
+        raise ValueError("unsupported checkpoint: requires v2/v3 static encoder")
     model = Policy(**state["architecture"]).to(device).eval()
     model.load_state_dict(state["model"])
     return model

@@ -13,7 +13,7 @@ from .learning import device_auto, rollout, update
 from .model import Policy
 
 
-def evaluate_greedy(model, sizes, count):
+def evaluate_greedy(model, sizes, count, multistart=False):
     model.eval()
     result = {}
     with torch.no_grad():
@@ -22,6 +22,17 @@ def evaluate_greedy(model, sizes, count):
             envs, _ = rollout(model, cases, greedy=True)
             result[str(n)] = dict(cost=float(np.mean([e.cost for e in envs])),
                                   feasible=float(np.mean([e.done and not e.infeasible for e in envs])))
+            if multistart:
+                best = []
+                for offset in range(0, count, 16):
+                    group = cases[offset:offset + 16]
+                    # Same instances, every customer as a forced first action.
+                    repeated = [inst for inst in group for _ in range(n)]
+                    starts = list(range(1, n + 1)) * len(group)
+                    routes, _ = rollout(model, repeated, greedy=True, first_actions=starts)
+                    best.extend(min(routes[j].cost for j in range(i * n, (i + 1) * n))
+                                for i in range(len(group)))
+                result[str(n)]["multistart_cost"] = float(np.mean(best))
     return result
 
 
@@ -53,13 +64,14 @@ def main():
     p.add_argument("--sizes", type=int, nargs="+", default=[10, 20, 30])
     p.add_argument("--capacity-factors", type=float, nargs=2, default=[0.75, 1.25])
     p.add_argument("--demand-maxes", type=int, nargs="+", default=[10])
-    p.add_argument("--updates", type=int, default=1000, help="maximum optimizer updates")
+    p.add_argument("--updates", type=int, default=None, help="maximum updates (default: 1000 unless --max-transitions is supplied)")
     p.add_argument("--max-transitions", type=int, default=None, help="stop after this training compute budget")
     p.add_argument("--batch", type=int, default=32, help="base instances; POMO samples n starts per instance")
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--width", type=int, default=64)
     p.add_argument("--layers", type=int, default=2)
+    p.add_argument("--glimpse", action="store_true", help="optional masked multi-head decoder glimpse")
     p.add_argument("--without-distance-bias", action="store_true")
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--anneal-to", type=float, default=None)
@@ -69,13 +81,17 @@ def main():
     p.add_argument("--validate-every", type=int, default=100)
     p.add_argument("--validate-every-transitions", type=int, default=100000)
     p.add_argument("--validation-count", type=int, default=256)
+    p.add_argument("--validation-multistart", action="store_true", help="log n-start greedy cost for every method")
+    p.add_argument("--selection-metric", choices=["greedy", "multistart"], default="greedy",
+                   help="predeclared validation metric; use multistart at a shared n-start budget")
     p.add_argument("--baseline-check-every", type=int, default=100)
     p.add_argument("--baseline-count", type=int, default=256,
                    help="independent frozen training pool for rollout baseline promotion")
     p.add_argument("--out", default="results/experiment")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     args = p.parse_args()
-    if min(args.sizes) < 2 or min(args.demand_maxes) < 1 or args.updates < 1 or args.batch < 1:
+    max_updates = args.updates if args.updates is not None else (10**9 if args.max_transitions else 1000)
+    if min(args.sizes) < 2 or min(args.demand_maxes) < 1 or max_updates < 1 or args.batch < 1:
         p.error("sizes >=2, demand maxima and budgets must be positive")
     if args.capacity_factors[0] <= 0 or args.capacity_factors[0] > args.capacity_factors[1]:
         p.error("capacity factor interval must be positive and ordered")
@@ -83,6 +99,8 @@ def main():
         p.error("--max-transitions must be positive")
     if args.validation_count < 2 or args.baseline_check_every < 1 or args.validate_every < 1 or args.validate_every_transitions < 1:
         p.error("evaluation counts and intervals must be positive")
+    if args.selection_metric == "multistart" and not args.validation_multistart:
+        p.error("--selection-metric multistart requires --validation-multistart for all methods")
     if args.method == "rollout" and args.baseline_count < 30:
         p.error("frozen rollout baseline requires at least 30 comparison instances")
     device = device_auto() if args.device == "auto" else args.device
@@ -92,7 +110,8 @@ def main():
     batches = training_batches(args.seed, batch=args.batch, sizes=args.sizes,
                                capacity_factors=args.capacity_factors, demand_maxes=args.demand_maxes)
     architecture = dict(width=args.width, layers=args.layers,
-                        distance_bias=not args.without_distance_bias, logit_clip=10.0)
+                        distance_bias=not args.without_distance_bias, logit_clip=10.0,
+                        glimpse=args.glimpse)
     model = Policy(**architecture).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     baseline_policy = copy.deepcopy(model).eval() if args.method == "rollout" else None
@@ -112,11 +131,11 @@ def main():
                        capacity_factors=args.capacity_factors,
                        demand_maxes=args.demand_maxes)) for n in args.sizes} if baseline_policy else {}
     with (directory / "history.jsonl").open("w") as log:
-        for iteration in range(1, args.updates + 1):
+        for iteration in range(1, max_updates + 1):
             cases = next(batches)
             n = len(cases[0]["demands"]) - 1
             t = (min(1.0, transitions / args.max_transitions) if args.max_transitions
-                 else (iteration - 1) / max(1, args.updates - 1))
+                 else (iteration - 1) / max(1, max_updates - 1))
             temperature = args.temperature if args.anneal_to is None else (
                 args.temperature * (1 - t) + args.anneal_to * t)
             step_start = time.perf_counter()
@@ -140,21 +159,23 @@ def main():
             record.update(iteration=iteration, n=n, episodes_total=episodes,
                           transitions_total=transitions, train_seconds=train_seconds,
                           elapsed_seconds=time.perf_counter() - start)
-            stopping = iteration == args.updates or (
+            stopping = iteration == max_updates or (
                 args.max_transitions is not None and transitions >= args.max_transitions)
             if (iteration % args.validate_every == 0 or stopping or
                     transitions - last_validation_transitions >= args.validate_every_transitions):
                 last_validation_transitions = transitions
-                record["validation"] = evaluate_greedy(model, args.sizes, args.validation_count)
+                record["validation"] = evaluate_greedy(
+                    model, args.sizes, args.validation_count,
+                    multistart=(args.validation_multistart or args.method == "pomo"))
                 torch.save({"model": model.state_dict(), "architecture": architecture,
-                            "architecture_version": 2,
+                            "architecture_version": 3 if args.glimpse else 2,
                             "iteration": iteration,
                             "rollout_baseline": baseline_policy.state_dict() if baseline_policy else None},
                            directory / "last.pt")
             log.write(json.dumps(record) + "\n")
             log.flush()
             if iteration % args.validate_every == 0 or stopping:
-                print(f"{iteration}/{args.updates} n={n} cost={record['mean_cost']:.3f} "
+                print(f"{iteration}/{max_updates} n={n} cost={record['mean_cost']:.3f} "
                       f"transitions={transitions}", flush=True)
             if stopping:
                 break
