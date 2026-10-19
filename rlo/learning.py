@@ -83,10 +83,11 @@ def update(model, optimizer, instances, method, *, temperature=1.0, lam=0.9,
                  rng.choice(np.arange(1, len(inst["demands"])), size=min(starts, len(inst["demands"]) - 1), replace=False)]
         instances = [inst for inst in instances for _ in range(min(starts, len(inst["demands"]) - 1))]
         starts = min(starts, len(instances[0]["demands"]) - 1)
+    baseline_envs = []
     if method == "rollout":
         with torch.no_grad():
-            base_envs, _ = rollout(model, instances, greedy=True)
-        baseline = [-e.cost for e in base_envs]
+            baseline_envs, _ = rollout(model, instances, greedy=True)
+        baseline = [-e.cost for e in baseline_envs]
     envs, traces = rollout(model, instances, first_actions=first, temperature=temperature)
     objective = loss(method, traces, envs, baseline=baseline, lam=lam, starts=starts)
     if entropy_weight:
@@ -97,9 +98,12 @@ def update(model, optimizer, instances, method, *, temperature=1.0, lam=0.9,
     objective.backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
+    baseline_steps = sum(len(e.tour) - 1 for e in baseline_envs)
     return dict(loss=float(objective.detach()), gradient=float(grad_norm),
                 mean_cost=float(np.mean([e.cost for e in envs])),
                 feasibility_rate=float(np.mean([not e.infeasible for e in envs])),
-                transitions=sum(len(e.tour) - 1 for e in envs),
+                transitions=sum(len(e.tour) - 1 for e in envs) + baseline_steps,
+                baseline_transitions=baseline_steps,
                 decisions=sum(e.decisions for e in envs),
-                episodes=len(envs))
+                episodes=len(envs) + len(baseline_envs),
+                baseline_episodes=len(baseline_envs))

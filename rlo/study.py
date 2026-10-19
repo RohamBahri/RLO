@@ -22,21 +22,23 @@ def model_from_checkpoint(path, device="auto"):
     return model
 
 
-def best_of_k(model, cases, k=1, seed=0, temperature=1):
+def best_of_k(model, cases, k=1, seed=0, temperature=1, return_transitions=False):
     """Sample k solutions per instance; return the shortest verified route and cost."""
     torch.manual_seed(seed)
     best = [None] * len(cases)
+    transitions = 0
     with torch.no_grad():
         for rep in range(k):
             envs, _ = rollout(model, cases, greedy=(k == 1), temperature=temperature)
             for i, env in enumerate(envs):
+                transitions += len(env.tour) - 1
                 try:
                     cost = validate(cases[i], env.finish())
                 except ValueError:
                     continue
                 if best[i] is None or cost < best[i][0]:
                     best[i] = (cost, env.tour)
-    return best
+    return (best, transitions) if return_transitions else best
 
 
 def main():
@@ -73,6 +75,7 @@ def main():
             refs = load(args.reference, cases)[0] if args.reference else None
             for k in args.k if model else [1]:
                 start = time.perf_counter()
+                transitions = 0
                 if model:
                     if args.legacy:
                         solutions = []
@@ -80,6 +83,7 @@ def main():
                             tours = [model(inst)] if k == 1 else [
                                 model.sample(inst, seed=args.seed + j * 100000 + rep)
                                 for rep in range(k)]
+                            transitions += sum(len(tour) - 1 for tour in tours)
                             feasible = []
                             for tour in tours:
                                 try:
@@ -88,17 +92,21 @@ def main():
                                     pass
                             solutions.append(min(feasible, default=None, key=lambda item: item[0]))
                     else:
-                        solutions = best_of_k(model, cases, k, args.seed)
+                        solutions, transitions = best_of_k(model, cases, k, args.seed,
+                                                           return_transitions=True)
                 else:
                     solver = clarke_wright if args.baseline == "savings" else nearest_neighbor
                     solutions = []
                     for inst in cases:
                         tour = solver(inst)
+                        transitions += len(tour) - 1
                         solutions.append((validate(inst, tour), tour))
                 lengths = [s[0] for s in solutions if s is not None]
                 paired_gaps = [100 * (s[0] / ref - 1) for s, ref in zip(solutions, refs)
                                if s is not None] if refs is not None else []
                 row = dict(n=n, capacity_factor=factor, k=k, count=len(cases),
+                           generated_tours=len(cases) * k if model else len(cases),
+                           inference_transitions=transitions,
                            feasible=len(lengths), feasibility_rate=len(lengths) / len(cases),
                            mean_feasible_cost=float(np.mean(lengths)) if lengths else None,
                            mean_feasible_gap_pct=float(np.mean(paired_gaps)) if paired_gaps else None,
