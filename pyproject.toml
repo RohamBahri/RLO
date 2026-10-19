@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rlo-research"
+version = "0.1.0"
+description = "Lean research foundations for learning-based combinatorial optimization"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+mlx = ["mlx"]
+cuda = ["torch"]
+ortools = ["ortools"]
+
+[tool.setuptools.packages.find]
+include = ["rlo*"]

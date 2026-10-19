@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+.env
+.ipynb_checkpoints/
+
+# Local data and training artifacts
+data/
+logs/
+results/
+checkpoints/
+*.pt
+*.pth
+*.pkl
+*.npz
+*.jsonl
+
+# OS and archives
+.DS_Store
+._*
+__MACOSX/
+*.zip
