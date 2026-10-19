@@ -8,6 +8,8 @@ pytest -q
 python -m rlo --n 10 --solver savings --reference exact
 ```
 
+**Research rules:** one shared policy must learn from its own experience across varying instance sizes and settings, then generalize to unseen cases. No supervised/imitation training or expert/solver-labeled solutions. Classical solvers and exact answers are evaluation-only. See [PRINCIPLES.md](PRINCIPLES.md).
+
 The core is NumPy-only. `legacy` is the original seed-42 split; `validation` and `test` use separate fixed streams. All routes are independently checked for feasibility and true Euclidean cost. Subset DP is **exact** for up to 12 customers. Larger references are feasible solutions, **not certified optima**.
 
 To generate and freeze route-based references (optional `pip install -e '.[pyvrp]'`):

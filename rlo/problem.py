@@ -3,14 +3,20 @@
 import numpy as np
 
 
-def generate(n, rng):
-    """Original RLO distribution; intentionally unchanged for legacy comparisons."""
+def generate(n, rng, *, capacity_factor=1.0, demand_max=10):
+    """Generate an unlabeled CVRP instance; defaults reproduce the 2026 benchmark.
+
+    Capacity and demand ranges may vary during experience-based training.
+    This changes problem parameters, not the type of constraints.
+    """
+    if n < 1 or demand_max < 1 or capacity_factor <= 0:
+        raise ValueError("n, demand_max and capacity_factor must be positive")
     coords = rng.uniform(0, 1, (n + 1, 2)).astype(np.float32)
     demands = np.zeros(n + 1, dtype=np.float32)
-    demands[1:] = rng.integers(1, 11, n)
-    capacity = max(10, round(5.5 * n / 3.5))
+    demands[1:] = rng.integers(1, demand_max + 1, n)
+    typical_load = (demand_max + 1) / 2 * n / 3.5
+    capacity = max(demand_max, round(typical_load * capacity_factor))
     return {"coords": coords, "demands": demands, "capacity": capacity}
-
 
 def distances(instance):
     p = instance["coords"].astype(np.float64)
