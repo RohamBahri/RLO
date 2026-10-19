@@ -40,6 +40,12 @@ def test_all_four_rl_updates_complete(method):
     assert np.isfinite(metrics["loss"])
     assert metrics["feasibility_rate"] == 1
     assert metrics["transitions"] >= 8
+    if method == "rollout":
+        assert metrics["baseline_episodes"] == 2
+        assert metrics["baseline_transitions"] >= 8
+        assert metrics["episodes"] == 4
+    else:
+        assert metrics["baseline_transitions"] == 0
     assert not torch.equal(before, model.embed.weight.detach())
     with torch.no_grad():
         routes, trace = rollout(model, cases, greedy=True)
@@ -57,4 +63,6 @@ def test_mbpi_training_uses_policy_rollouts_and_exact_is_only_metric():
     assert np.isfinite(q[env.legal()]).all() and steps > 0
     m = improve(model, opt, [env], samples=2, oracle_metrics=True)
     assert m["rollout_transitions"] > 0
+    assert m["collection_transitions"] > 0
+    assert m["transitions_total"] == m["rollout_transitions"] + m["collection_transitions"]
     assert m["mean_optimal_action_regret"] >= -1e-8

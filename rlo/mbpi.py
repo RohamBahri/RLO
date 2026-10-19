@@ -40,7 +40,11 @@ def state_from_experience(model, instance, rng):
         while not env.done:
             states.append(copy.deepcopy(env))
             env.step(sample_action(model, env))
-    return states[int(rng.integers(len(states)))] if states else None
+    if not states:
+        return None
+    selected = states[int(rng.integers(len(states)))]
+    selected.collection_transitions = len(env.tour) - 1
+    return selected
 
 
 def estimate_q(model, env, samples):
@@ -68,11 +72,14 @@ def improve(model, optimizer, states, *, samples=8, eta=0.2, oracle_metrics=Fals
         raise ValueError("eta and samples must be positive")
     losses, errors = [], []
     total_steps = 0
+    collection_steps = sum(getattr(env, "collection_transitions", 0) for env in states if env is not None)
+    search_rollouts = 0
     for env in states:
         if env is None:
             continue
         q, steps = estimate_q(model, env, samples)
         total_steps += steps
+        search_rollouts += samples * int(env.legal().sum())
         logits = policy_logits(model, env)
         legal = torch.as_tensor(env.legal(), device=logits.device)
         q_tensor = torch.as_tensor(q[env.legal()], device=logits.device, dtype=logits.dtype)
@@ -91,6 +98,9 @@ def improve(model, optimizer, states, *, samples=8, eta=0.2, oracle_metrics=Fals
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     return dict(loss=float(objective.detach()), rollout_transitions=total_steps,
+                collection_transitions=collection_steps,
+                transitions_total=total_steps + collection_steps,
+                search_rollouts=search_rollouts,
                 states=len(losses), mean_optimal_action_regret=(float(np.mean(errors)) if errors else None))
 
 
@@ -122,13 +132,16 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.json").write_text(json.dumps(vars(args), indent=2))
     start = time.perf_counter()
+    cumulative = 0
     with (out / "history.jsonl").open("w") as log:
         for i in range(args.updates):
             cases = [generate(args.n, rng) for _ in range(args.batch)]
             states = [state_from_experience(model, inst, rng) for inst in cases]
             record = improve(model, optimizer, states, samples=args.samples, eta=args.eta,
                              oracle_metrics=args.diagnostic)
-            record.update(iteration=i + 1, elapsed_seconds=time.perf_counter() - start)
+            cumulative += record["transitions_total"]
+            record.update(iteration=i + 1, transitions_cumulative=cumulative,
+                          elapsed_seconds=time.perf_counter() - start)
             log.write(json.dumps(record) + "\n")
             log.flush()
             print(json.dumps(record), flush=True)
