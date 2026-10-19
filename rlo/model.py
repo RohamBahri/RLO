@@ -1,4 +1,4 @@
-"""Permutation-equivariant routing policy: six node sensors, two global sensors."""
+"""Permutation-equivariant CVRP policy: static attention encoder, dynamic decoder."""
 
 import math
 import torch
@@ -8,6 +8,8 @@ from torch import nn
 class Attention(nn.Module):
     def __init__(self, width, heads=4):
         super().__init__()
+        if width % heads:
+            raise ValueError("width must be divisible by the number of attention heads")
         self.heads = heads
         self.qkv = nn.Linear(width, 3 * width)
         self.out = nn.Linear(width, width)
@@ -27,23 +29,34 @@ class Attention(nn.Module):
 
 
 class Policy(nn.Module):
-    def __init__(self, width=64, layers=2, distance_bias=True):
+    def __init__(self, width=64, layers=2, distance_bias=True, logit_clip=10.0):
         super().__init__()
-        self.width, self.distance_bias = width, distance_bias
-        self.embed = nn.Linear(6, width)
+        self.width, self.distance_bias, self.logit_clip = width, distance_bias, logit_clip
+        self.embed = nn.Linear(4, width)
         self.encoder = nn.ModuleList([Attention(width) for _ in range(layers)])
+        self.dynamic = nn.Linear(2, width)
         self.global_embed = nn.Linear(2, width)
         self.query = nn.Linear(3 * width, width)
         self.key = nn.Linear(width, width)
         self.value = nn.Sequential(nn.Linear(3 * width, width), nn.ReLU(), nn.Linear(width, 1))
 
-    def forward(self, nodes, global_features, dist, mask):
-        h = self.embed(nodes)
+    def encode(self, nodes, dist):
+        """Run attention just once per instance; node features 0:4 never change."""
+        h = self.embed(nodes[..., :4])
         for layer in self.encoder:
             h = layer(h, dist, self.distance_bias)
-        current = nodes[:, :, 5].argmax(dim=1)
+        return h
+
+    def decode(self, static, nodes, global_features, mask):
+        """Update only lightweight dynamic state at each routing decision."""
+        h = static + self.dynamic(nodes[..., 4:6])
+        current = nodes[..., 5].argmax(dim=1)
         here = h[torch.arange(len(h), device=h.device), current]
         context = torch.cat([here, h.mean(1), self.global_embed(global_features)], dim=-1)
-        logits = (self.key(h) @ self.query(context).unsqueeze(-1)).squeeze(-1) / math.sqrt(self.width)
-        logits = logits.masked_fill(~mask, -1e9)
-        return logits, self.value(context).squeeze(-1)
+        scores = (self.key(h) @ self.query(context).unsqueeze(-1)).squeeze(-1) / math.sqrt(self.width)
+        if self.logit_clip is not None:
+            scores = self.logit_clip * torch.tanh(scores / self.logit_clip)
+        return scores.masked_fill(~mask, -1e9), self.value(context).squeeze(-1)
+
+    def forward(self, nodes, global_features, dist, mask):
+        return self.decode(self.encode(nodes, dist), nodes, global_features, mask)

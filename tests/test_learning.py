@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import pytest
 
@@ -34,16 +35,17 @@ def test_policy_is_permutation_equivariant():
 def test_all_four_rl_updates_complete(method):
     model = small_model()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    cases = instances(4, "validation", 2)
+    cases = instances(8, "validation", 4)
     before = model.embed.weight.detach().clone()
-    metrics = update(model, optimizer, cases, method, starts=2, rng=np.random.default_rng(0))
+    metrics = update(model, optimizer, cases, method, starts=2, rng=np.random.default_rng(0),
+                     baseline_policy=copy.deepcopy(model) if method == "rollout" else None)
     assert np.isfinite(metrics["loss"])
     assert metrics["feasibility_rate"] == 1
     assert metrics["transitions"] >= 8
     if method == "rollout":
-        assert metrics["baseline_episodes"] == 2
+        assert metrics["baseline_episodes"] == 4
         assert metrics["baseline_transitions"] >= 8
-        assert metrics["episodes"] == 4
+        assert metrics["episodes"] == 8
     else:
         assert metrics["baseline_transitions"] == 0
     assert not torch.equal(before, model.embed.weight.detach())

@@ -1,4 +1,4 @@
-"""One on-policy rollout engine and four small experience-only RL objectives."""
+"""One cached-encoder rollout engine and four on-policy RL objectives."""
 
 import numpy as np
 import torch
@@ -14,18 +14,32 @@ def device_auto():
 
 
 def rollout(model, instances, *, greedy=False, temperature=1.0, first_actions=None):
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
     batch = BatchCVRP(instances, first_actions=first_actions)
     traces = [dict(logp=[], value=[], reward=[], entropy=[]) for _ in instances]
     device = next(model.parameters()).device
+    # Static embeddings are shared by every decision in an episode. Autograd
+    # correctly accumulates gradients from all decoder steps into this graph.
+    # POMO repeats each instance for its n forced starts. Encode each unique
+    # instance only once, then share its differentiable embeddings across starts.
+    unique, replica, lookup = [], [], {}
+    for i, instance in enumerate(instances):
+        if id(instance) not in lookup:
+            lookup[id(instance)] = len(unique)
+            unique.append(i)
+        replica.append(lookup[id(instance)])
+    all_nodes, _, all_dist, _ = batch.observe(unique)
+    encoded = model.encode(torch.as_tensor(all_nodes, device=device),
+                           torch.as_tensor(all_dist, device=device))[replica]
     while indices := batch.active():
-        observations = batch.observe(indices)
-        nodes, glob, dist = [torch.as_tensor(x, device=device) for x in observations[:3]]
-        mask = torch.as_tensor(observations[3], device=device)
-        logits, values = model(nodes, glob, dist, mask)
+        nodes, glob, _, mask = batch.observe(indices)
+        logits, values = model.decode(encoded[indices], torch.as_tensor(nodes, device=device),
+                                      torch.as_tensor(glob, device=device),
+                                      torch.as_tensor(mask, device=device))
         distribution = torch.distributions.Categorical(logits=logits / temperature)
         actions = logits.argmax(-1) if greedy else distribution.sample()
-        logp = distribution.log_prob(actions)
-        entropy = distribution.entropy()
+        logp, entropy = distribution.log_prob(actions), distribution.entropy()
         result = batch.step(indices, actions.detach().cpu().tolist())
         for k, i in enumerate(indices):
             traces[i]["logp"].append(logp[k])
@@ -44,7 +58,7 @@ def loss(method, traces, envs, *, baseline=None, lam=0.9, value_weight=0.5, star
         baseline = float(targets.mean()) if baseline is None else baseline
     elif method == "rollout":
         if baseline is None or len(baseline) != len(traces):
-            raise ValueError("rollout baseline requires one greedy value per instance")
+            raise ValueError("frozen rollout baseline requires one greedy value per instance")
         targets = -costs
     elif method == "pomo":
         if len(envs) % starts or starts < 2:
@@ -64,9 +78,8 @@ def loss(method, traces, envs, *, baseline=None, lam=0.9, value_weight=0.5, star
                 g = tr["reward"][t] + (1 - lam) * next_v + lam * g
                 returns.append(g)
             target = torch.stack(returns[::-1]).detach()
-            actor = -(logp * (target - values.detach())).sum()
-            critic = value_weight * (values - target).square().sum()
-            total = total + actor + critic
+            total = total - (logp * (target - values.detach())).sum()
+            total = total + value_weight * (values - target).square().sum()
         else:
             base = baseline[i] if method in ("rollout", "pomo") else baseline
             total = total - logp.sum() * (targets[i] - base)
@@ -74,22 +87,28 @@ def loss(method, traces, envs, *, baseline=None, lam=0.9, value_weight=0.5, star
 
 
 def update(model, optimizer, instances, method, *, temperature=1.0, lam=0.9,
-           baseline=None, starts=4, rng=None, entropy_weight=0.0):
+           baseline=None, baseline_policy=None, starts=None, rng=None, entropy_weight=0.0):
     model.train()
     first = None
     if method == "pomo":
         rng = np.random.default_rng() if rng is None else rng
+        n = len(instances[0]["demands"]) - 1
+        starts = n if starts is None else min(starts, n)
+        if starts < 2:
+            raise ValueError("POMO requires at least two customers/starts")
         first = [int(a) for inst in instances for a in
-                 rng.choice(np.arange(1, len(inst["demands"])), size=min(starts, len(inst["demands"]) - 1), replace=False)]
-        instances = [inst for inst in instances for _ in range(min(starts, len(inst["demands"]) - 1))]
-        starts = min(starts, len(instances[0]["demands"]) - 1)
+                 rng.choice(np.arange(1, n + 1), size=starts, replace=False)]
+        instances = [inst for inst in instances for _ in range(starts)]
     baseline_envs = []
     if method == "rollout":
+        if baseline_policy is None:
+            raise ValueError("rollout requires an independently frozen baseline policy")
+        baseline_policy.eval()
         with torch.no_grad():
-            baseline_envs, _ = rollout(model, instances, greedy=True)
+            baseline_envs, _ = rollout(baseline_policy, instances, greedy=True)
         baseline = [-e.cost for e in baseline_envs]
     envs, traces = rollout(model, instances, first_actions=first, temperature=temperature)
-    objective = loss(method, traces, envs, baseline=baseline, lam=lam, starts=starts)
+    objective = loss(method, traces, envs, baseline=baseline, lam=lam, starts=starts or 1)
     if entropy_weight:
         entropy = [x for tr in traces for x in tr["entropy"]]
         if entropy:
@@ -101,9 +120,10 @@ def update(model, optimizer, instances, method, *, temperature=1.0, lam=0.9,
     baseline_steps = sum(len(e.tour) - 1 for e in baseline_envs)
     return dict(loss=float(objective.detach()), gradient=float(grad_norm),
                 mean_cost=float(np.mean([e.cost for e in envs])),
-                feasibility_rate=float(np.mean([not e.infeasible for e in envs])),
+                feasibility_rate=float(np.mean([e.done and not e.infeasible for e in envs])),
                 transitions=sum(len(e.tour) - 1 for e in envs) + baseline_steps,
                 baseline_transitions=baseline_steps,
                 decisions=sum(e.decisions for e in envs),
                 episodes=len(envs) + len(baseline_envs),
-                baseline_episodes=len(baseline_envs))
+                baseline_episodes=len(baseline_envs),
+                starts=starts if method == "pomo" else 1)

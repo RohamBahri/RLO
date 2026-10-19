@@ -17,19 +17,29 @@ from .solvers import clarke_wright, nearest_neighbor
 def model_from_checkpoint(path, device="auto"):
     device = device_auto() if device == "auto" else device
     state = torch.load(path, map_location=device, weights_only=True)
+    if state.get("architecture_version") != 2:
+        raise ValueError("obsolete experimental checkpoint: train again with v2 static encoder")
     model = Policy(**state["architecture"]).to(device).eval()
     model.load_state_dict(state["model"])
     return model
 
 
-def best_of_k(model, cases, k=1, seed=0, temperature=1, return_transitions=False):
+def best_of_k(model, cases, k=1, seed=0, temperature=1, return_transitions=False,
+              multistart=False):
     """Sample k solutions per instance; return the shortest verified route and cost."""
     torch.manual_seed(seed)
+    if k < 1 or (multistart and k > len(cases[0]["demands"]) - 1):
+        raise ValueError("k must be positive and multistart k cannot exceed n")
+    starts = ([np.random.default_rng(seed + i).permutation(
+        np.arange(1, len(inst["demands"])))[:k] for i, inst in enumerate(cases)]
+              if multistart else None)
     best = [None] * len(cases)
     transitions = 0
     with torch.no_grad():
         for rep in range(k):
-            envs, _ = rollout(model, cases, greedy=(k == 1), temperature=temperature)
+            first = [int(row[rep]) for row in starts] if multistart else None
+            envs, _ = rollout(model, cases, greedy=(multistart or k == 1),
+                              temperature=temperature, first_actions=first)
             for i, env in enumerate(envs):
                 transitions += len(env.tour) - 1
                 try:
@@ -52,11 +62,15 @@ def main():
     p.add_argument("--count", type=int, default=100)
     p.add_argument("--k", type=int, nargs="+", default=[1, 16, 128])
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--multistart", action="store_true",
+                   help="evaluate greedy completions from distinct forced first customers (k<=n)")
     p.add_argument("--reference", help="route-based frozen reference file (one size and factor only)")
     p.add_argument("--out", help="optional JSON summary")
     args = p.parse_args()
     if args.reference and (len(args.sizes) != 1 or args.factors != [1.0]):
         p.error("--reference requires one size and factor 1.0")
+    if args.multistart and (args.legacy or not args.checkpoint or max(args.k) > min(args.sizes)):
+        p.error("--multistart requires a new model checkpoint and k<=min(sizes)")
     if args.legacy and not args.checkpoint:
         p.error("--legacy requires --checkpoint")
     if args.legacy:
@@ -93,7 +107,8 @@ def main():
                             solutions.append(min(feasible, default=None, key=lambda item: item[0]))
                     else:
                         solutions, transitions = best_of_k(model, cases, k, args.seed,
-                                                           return_transitions=True)
+                                                           return_transitions=True,
+                                                           multistart=args.multistart)
                 else:
                     solver = clarke_wright if args.baseline == "savings" else nearest_neighbor
                     solutions = []
@@ -104,7 +119,7 @@ def main():
                 lengths = [s[0] for s in solutions if s is not None]
                 paired_gaps = [100 * (s[0] / ref - 1) for s, ref in zip(solutions, refs)
                                if s is not None] if refs is not None else []
-                row = dict(n=n, capacity_factor=factor, k=k, count=len(cases),
+                row = dict(n=n, capacity_factor=factor, k=k, multistart=args.multistart, count=len(cases),
                            generated_tours=len(cases) * k if model else len(cases),
                            inference_transitions=transitions,
                            feasible=len(lengths), feasibility_rate=len(lengths) / len(cases),
