@@ -43,7 +43,7 @@ def main():
     report = evaluate(data, methods[args.solver], refs)
     report.update({"n": args.n, "split": args.split, "solver": args.solver, "reference_method": method})
     print(f"{args.solver}: {report['feasibility_rate']:.0%} feasible, "
-          f"mean gap {report['mean_gap_pct']}%, {report['total_seconds']:.2f}s")
+          f"mean gap (feasible only) {report['mean_feasible_gap_pct']}%, {report['total_seconds']:.2f}s")
     if args.output:
         from pathlib import Path
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)

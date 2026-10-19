@@ -1,9 +1,7 @@
-# Research status (October 2026)
+# Research status · October 2026
 
-**Completed:** CFLP learned beam search (negative exploratory result); CVRP MVP0–5 (best general checkpoint: MVP5, ~6.64% mean gap on sizes 11,13,15,17,19); experimental AlphaZero/async/GVF attempts (confounded by training instability).
+MVP5 is the best saved general policy (~6.64% mean *historical reference* gap over n=11,13,15,17,19); the archived means included rare infeasible tours. MBPI reached ~1.1% greedy gap on one n=30 instance after millions of rollouts but has no distribution-level validation. AlphaZero/GVF v3 is confounded by unstable training and uninformative feasibility targets.
 
-**Open:** MBPI obtained ~1.1% greedy gap on one CVRP-30 instance after millions of rollouts, but has not demonstrated distribution-level learning. The goal is to test whether expensive rollout policy improvement can be amortized across unseen instances.
+**Phase 1:** canonical generator, independent feasible-tour evaluation, fixed streams, exact n≤12 solution, route-verifiable references and paired metrics. The archived n=20 OR-Tools costs (means 6.383451, 6.373003 and 6.358619) lack saved tours and used rounded integer objectives, so they are historical only. Freeze stronger n≥20 route references using PyVRP or another solver before tuning. PyVRP 0.14 uses iterated local search, not the older HGS engine.
 
-**Phase 1:** canonical generator, distinct fixed splits, independent feasibility/cost evaluation, exact small CVRP, immutable legacy references, optional heuristic OR-Tools. Historical checkpoints are *not* imported into this repository.
-
-**Next:** calibrate the archived MVP5 checkpoint via greedy/best-of-K sampling; diagnose MBPI against exact CVRP-10 action values; then compare distribution training with a strong policy-gradient anchor.
+**Next:** build one masked batched environment and exact cost-to-go from partial states, then zero-training MVP5 sampling and n=10 MBPI diagnostics.

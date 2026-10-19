@@ -1,18 +1,20 @@
 # RLO
 
-Lean experiments in learning to solve combinatorial optimization problems. Currently, **CVRP** is the testbed; the focus is whether rollout-based policy improvement generalizes across instances.
-
-## Start
+Lean experiments in learning to solve combinatorial optimization problems, using CVRP as a testbed.
 
 ```bash
 pip install -e '.[test]'
 pytest -q
 python -m rlo --n 10 --solver savings --reference exact
-python -m rlo --n 20 --split legacy --count 100 --reference benchmarks/legacy_n20.json
 ```
 
-CVRP instances use the original 2026 generator. `legacy` reproduces its 100 seed-42 cases; `validation` and `test` are separate fixed streams. The small subset-DP solver is **exact** (up to 12 customers). Legacy and OR-Tools reference values are **feasible heuristics**, not proven optima. Evaluation checks route feasibility and measures real Euclidean distance.
+The core is NumPy-only. `legacy` is the original seed-42 split; `validation` and `test` use separate fixed streams. All routes are independently checked for feasibility and true Euclidean cost. Subset DP is **exact** for up to 12 customers. Larger references are feasible solutions, **not certified optima**.
 
-The core needs only NumPy. Optional `mlx`, `cuda` (PyTorch), and `ortools` extras are available. `rlo.backend.choose()` selects MLX on Apple Silicon, CUDA PyTorch when available, or NumPy otherwise; no neural training code is included yet.
+To generate and freeze route-based references (optional `pip install -e '.[pyvrp]'`):
 
-To evaluate an archived MVP5 checkpoint, install `pip install -e ".[cuda]"` (PyTorch also runs on CPU) and run `python -m rlo --n 19 --split legacy --solver mvp5 --checkpoint /path/to/mvp5.pt --reference ortools`. Checkpoints and old experimental branches stay in the external archive, not in Git.
+```bash
+python -m scripts.freeze_references --n 20 --split validation --method pyvrp
+python -m scripts.freeze_references --n 20 --split test --method pyvrp
+```
+
+The original CVRP-20 cost-only archive is kept for historical comparison, **not** as a canonical benchmark: routes were not saved. Use `rlo.evaluate.paired` to compare methods on the instances feasible for both. Old MVP5 checkpoints use the optional PyTorch adapter; they are not stored in Git.
