@@ -1,96 +1,69 @@
 # RLO
 
-Research on **experience-only reinforcement learning that generalizes** across instances, sizes and settings of combinatorial optimization problems. CVRP is the first testbed. See [the frozen model and experiment protocol](docs/spec.md) and [research principles](PRINCIPLES.md).
+Experience-only reinforcement learning for combinatorial optimization, beginning with the capacitated vehicle routing problem (CVRP). The goal is **one policy trained across instances and settings that also works on unseen problems**, without external solver or heuristic demonstrations.
+
+- [PRINCIPLES.md](PRINCIPLES.md) — research constraints, including what experience-derived KL improvement permits.
+- [docs/spec.md](docs/spec.md) — canonical CVRP formulation, frozen evaluation grid, and preregistered experiment decisions.
+- [benchmarks/README.md](benchmarks/README.md) — reference validity and legacy limitations.
+
+## Setup
 
 ```bash
-pip install -e '.[test,rl]'
+pip install -e '.[test,rl,plots]'
 pytest -q
 python -m rlo --n 10 --solver savings --reference exact
 ```
 
-Train the four masked RL baselines (change `--method` to `reinforce`, `rollout`, `a2c` or `pomo`):
+Training uses PyTorch (CUDA, Apple MPS, or CPU). The archived MVP5 checkpoint is evaluated through a separate adapter; it is **not** compatible with current-policy training checkpoints.
+
+## Training and evaluation
+
+Train one masked policy (methods: `reinforce`, `rollout`, `a2c`, `pomo`):
 
 ```bash
-python -m rlo.train --method a2c --sizes 10 20 30 --max-transitions 1000000 --updates 100000 --lr 0.0001 --seed 0 --out results/a2c_0
+python -m rlo.train --method a2c --sizes 10 20 30 --width 128 \
+  --max-transitions 100000 --seed 0 --out results/smoke
+python -m rlo.study --checkpoint results/smoke/last.pt \
+  --split validation --sizes 10 20 30 --k 1 16
 ```
 
-Run a controlled Group A learning-rate/seed sweep (select on validation, not test):
+For reproducible screens, use `python -m scripts.sweep`. For results:
 
 ```bash
-python -m scripts.sweep --methods reinforce rollout a2c pomo --lrs 0.0001 0.0003 --seeds 0 1 2 --max-transitions 1000000
-pip install -e '[plots]'
-python -m scripts.curves results/group_a
+python -m scripts.group_a_report results/group_a \
+  --out results/group_a_analysis
+python -m scripts.curves results/group_a --out results/group_a_curves
 ```
 
-Evaluate unseen instances and inference budgets, without tuning on `test`:
+Choose learning rates on validation only; leave the final test split untouched until selection is complete. All reference tours are evaluated using independent unrounded Euclidean costs.
 
-```bash
-python -m rlo.study --checkpoint results/a2c_0/last.pt --split validation --sizes 10 20 30 --k 1 16 128
-python -m rlo.study --checkpoint results/a2c_0/last.pt --split validation --sizes 20 --k 1 4 20 --multistart
-```
+## Narval: CPU references alongside the GPU study
 
-Calibrate an archived MVP5 checkpoint independently (greedy and seeded stochastic best-of-K; routes may be infeasible):
-
-```bash
-python -m rlo.study --legacy --checkpoint /path/to/mvp5.pt --split legacy --sizes 11 13 15 17 19 --k 1 16 128
-```
-
-Experience-only KL-MBPI experiment, with optional **evaluation-only** exact diagnostics:
-
-```bash
-python -m rlo.mbpi --checkpoint results/a2c_0/last.pt --n 10 --diagnostic --updates 10 --samples 8
-```
-
-The core environment, exact small-instance solvers and benchmarks need only NumPy. Training uses **PyTorch** (CUDA on NVIDIA, MPS on Apple Silicon, CPU otherwise) to keep one verifiable training implementation; MLX-only training is not claimed. Historical MVP5 is a separate optional PyTorch adapter. Route-verified larger reference sets are not yet committed; generate them via `python -m scripts.freeze_references --n 20 --split validation --method pyvrp` after `pip install -e '.[pyvrp]'`. Archived cost-only references are historical, not exact or route-verifiable.
-
-**Group A fairness:** The policy uses static node attention **once per episode** and a light state decoder, inverse size `1/n`, logit clipping at ±10, masked actions, a per-size REINFORCE baseline, a *frozen* rollout baseline promoted only on an independent training pool, and all-`n` POMO starts by default. Default validation is 256 instances per size. The sweep is an **initial screening**, not a convergence result: extend the strongest models until learning curves flatten within predefined compute limits. Use the untouched `test` split only after choosing settings. Previous `rlo.train` v1 checkpoints are incompatible with the new v2 architecture; archived MVP5 remains available through `--legacy`.
-
-### Before the Group A sweep: architecture pilot
-
-The decoder-glimpse hypothesis is not yet validated. Run identical experiments with and without `--glimpse` (default: off):
-
-```bash
-python -m scripts.sweep --methods a2c pomo --sizes 10 --widths 64 128 \
-  --architectures plain glimpse --lrs 0.0003 --seeds 0 \
-  --max-transitions 5000000 --out results/arch_n10
-python -m scripts.sweep --methods a2c pomo --sizes 20 --widths 64 128 \
-  --architectures plain glimpse --lrs 0.0003 --seeds 0 \
-  --max-transitions 5000000 --out results/arch_n20
-python -m scripts.curves results/arch_n10 --out results/plots_n10
-```
-
-Validation always records single-start greedy; POMO also records all-start greedy. For a **fair all-start primary** across all methods, pass both `--validation-multistart --selection-metric multistart` (more costly). Architecture should only be frozen after confirming any difference across seeds. Group A LR screening defaults to **10M transitions**, not 1M.
-
-## Held-out references and Group A analysis (October 2026)
-
-The canonical evaluation generator is `evaluation_instances(n, split, count, capacity_factor)`. Changed-capacity scenarios keep coordinates and demands fixed; capacity factor 1 retains historical evaluation cases. PyVRP 0.14.x search now scales integer distances by 10,000 while scoring all tours in the original Euclidean metric.
-
-**Do not update the active `~/RLO` checkout while GPU Slurm array 6564009 is running.** Make a separate cluster checkout for CPU reference tasks:
+**While Slurm GPU array 6564009 is active, do not pull or edit `~/RLO` or change its Python environment.** Use a separate checkout and virtual environment for the new reference code:
 
 ```bash
 git clone https://github.com/RohamBahri/RLO.git ~/RLO_refs
 cd ~/RLO_refs
-mkdir -p logs
 module load python/3.11
-mkdir -p ~/venvs
+mkdir -p ~/venvs logs
 virtualenv --no-download ~/venvs/rlo_refs
 source ~/venvs/rlo_refs/bin/activate
-pip install --no-index -e '.[pyvrp]'
+pip install --no-index -e '.[test,pyvrp]'
+pytest -q
 python -c 'import pyvrp; print(pyvrp.__version__)'
-# If the PyVRP package is unavailable from the Alliance wheelhouse,
-# stop and resolve the installation before submitting jobs.
 sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
-# Inspect successful smoke results before launching all 18 tasks:
+```
+
+Inspect the smoke job's output and its `COMPLETED` state first. Only after **all** smoke instances pass:
+
+```bash
 sbatch --account=def-brostami-ab scripts/references_cpu.sbatch
 ```
 
-All reference JSON files are written to `$SCRATCH/RLO_references` and store verified tours, fingerprints and capacity factors. Copy finished datasets to permanent storage. For n=10/12 references are exact; for larger n they are multiseed heuristic upper bounds. Test references can be frozen now, but cannot be used for model selection.
+The CPU array prepares validation and test references at n=10,12,20,25,30,40,50, plus capacity shifts at n=20. Small reference tours are exact; larger ones are **heuristic upper bounds**, not certified optima. Files are stored under `$SCRATCH/RLO_references`; copy completed datasets to persistent storage.
 
-After Group A completes:
+Once the GPU array finishes, use `python -m scripts.group_a_report "$SCRATCH/RLO_runs/group_a_gpu"` to compare completed configurations.
 
-```bash
-python -m scripts.group_a_report "$SCRATCH/RLO_runs/group_a_gpu" --out "$SCRATCH/RLO_runs/group_a_analysis"
-python -m scripts.curves "$SCRATCH/RLO_runs/group_a_gpu" --out "$SCRATCH/RLO_runs/group_a_curves"
-```
+## Repository hygiene
 
-The report uses the final single-start greedy validation cost divided by sqrt(n), averaged across n=10/20/30 and three seeds, to select learning rates. It retains per-seed costs, optimizer update counts and training time. `rlo.study --out` now includes per-instance cost/fingerprint records for paired evaluation.
+Keep `main` canonical. Use short-lived branches for changes, merge reviewed PRs, then delete their branches. Preserve runnable research experiments and regression tests rather than duplicating historical MVP scripts. The older cost-only CVRP-20 references are retained solely as historical records; they cannot certify route quality.

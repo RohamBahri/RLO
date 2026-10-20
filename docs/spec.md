@@ -32,9 +32,9 @@ One size per batch, no padding. Model and training can support different sizes b
 
 Reference solutions: exact DP for small complete problems and exact residual n≤10; route-verified heuristic references for larger n. Never call a heuristic reference optimal. Stronger fixed validation/test references for n≥20 remain to be generated using the optional reference builder.
 
-## Pre-Group-A architecture check (pilot protocol)
+## Architecture pilot outcome (October 2026)
 
-The first n=10 pilot learned stably but three methods plateaued early; possible decoder limitations are unproven. Compare plain vs. glimpse decoder at widths 64/128 on separately trained n=10 and n=20 tasks (A2C and full-n POMO, fixed LR/seed, 5M **environment transitions per run**). Vary no other model components. Track greedy and full-n-start validation separately; the primary comparable selection metric for this pilot is **single-start greedy** (n-start is secondary). For wall-clock efficiency curves, use `train_seconds` (which excludes unequal validation workloads), not `elapsed_seconds`. Check training stability and parameter counts as well as solution quality. Do not declare a winner from a single seed; replicate promising differences before freezing Group A's architecture. Group A screening defaults to 10M transitions and must tune LR per method.
+At n=10 and n=20, 5M-transition single-seed architecture screens did not show a consistent advantage for the optional glimpse decoder. The **plain width-128, two-layer** architecture was frozen provisionally for Group A. The n=10 POMO-width128-glimpse run timed out at ~0.77M/5M transitions and is excluded from completed comparisons.
 
 ## Frozen decisions before Group A outcomes (October 20, 2026)
 
