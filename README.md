@@ -48,8 +48,11 @@ module load python/3.11
 mkdir -p ~/venvs logs
 virtualenv --no-download ~/venvs/rlo_refs
 source ~/venvs/rlo_refs/bin/activate
-pip install --no-index -e '.[test,pyvrp]'
-pytest -q
+# First use Alliance's wheelhouse for the local project and pytest.
+python -m pip install --no-index -e '.[test]'
+# PyVRP 0.14.1 is not in that wheelhouse; fetch its Python 3.11 wheel from PyPI.
+python -m pip install --index-url https://pypi.org/simple 'pyvrp==0.14.1'
+python -m pytest -q
 python -c 'import pyvrp; print(pyvrp.__version__)'
 sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
 ```
