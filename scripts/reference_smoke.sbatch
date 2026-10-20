@@ -8,7 +8,7 @@
 
 cd "$HOME/RLO_refs"
 module load python/3.11
-source "$HOME/venvs/rlo/bin/activate"
+source "$HOME/venvs/rlo_refs/bin/activate"
 set -euo pipefail
 export OMP_NUM_THREADS=2
 export OPENBLAS_NUM_THREADS=1
