@@ -50,8 +50,9 @@ virtualenv --no-download ~/venvs/rlo_refs
 source ~/venvs/rlo_refs/bin/activate
 # First use Alliance's wheelhouse for the local project and pytest.
 python -m pip install --no-index -e '.[test]'
-# PyVRP 0.14.1 is not in that wheelhouse; fetch its Python 3.11 wheel from PyPI.
-python -m pip install --index-url https://pypi.org/simple 'pyvrp==0.14.1'
+# PyVRP 0.14.1 is not in that wheelhouse. Force the prebuilt PyPI wheel; compiling its C++ dependencies can fail with Narval's GCC 12.
+python -m pip install --no-cache-dir --only-binary=:all: \
+  --index-url https://pypi.org/simple 'pyvrp==0.14.1'
 python -m pytest -q
 python -c 'import pyvrp; print(pyvrp.__version__)'
 sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
