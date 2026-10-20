@@ -54,7 +54,8 @@ python -m pip install --no-index -e '.[test]'
 # On your LOCAL laptop (not Narval), download Linux CPython 3.11 wheels:
 #   mkdir -p ~/pyvrp-wheels
 #   python3 -m pip download --only-binary=:all: \
-#     --platform manylinux_2_27_x86_64 --python-version 3.11 \
+#     --platform manylinux_2_27_x86_64 --platform manylinux2014_x86_64 \
+#     --python-version 3.11 \
 #     --implementation cp --abi cp311 --dest ~/pyvrp-wheels 'pyvrp==0.14.1'
 #   tar -czf ~/pyvrp-wheels.tar.gz -C ~/pyvrp-wheels .
 #   scp ~/pyvrp-wheels.tar.gz robahri@narval.alliancecan.ca:~/
