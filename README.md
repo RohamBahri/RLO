@@ -50,10 +50,18 @@ virtualenv --no-download ~/venvs/rlo_refs
 source ~/venvs/rlo_refs/bin/activate
 # First use Alliance's wheelhouse for the local project and pytest.
 python -m pip install --no-index -e '.[test]'
-# PyVRP 0.14.1 is not in that wheelhouse. Override Narval's pip no-index configuration and force the prebuilt PyPI wheel; compiling PyVRP's C++ dependencies can fail with Narval's GCC 12.
-PIP_CONFIG_FILE=/dev/null PIP_NO_INDEX=0 \
-python -m pip install --no-cache-dir --only-binary=:all: \
-  --index-url https://pypi.org/simple 'pyvrp==0.14.1'
+# Narval cannot currently retrieve a compatible PyVRP wheel directly.
+# On your LOCAL laptop (not Narval), download Linux CPython 3.11 wheels:
+#   mkdir -p ~/pyvrp-wheels
+#   python3 -m pip download --only-binary=:all: \
+#     --platform manylinux_2_27_x86_64 --python-version 3.11 \
+#     --implementation cp --abi cp311 --dest ~/pyvrp-wheels 'pyvrp==0.14.1'
+#   tar -czf ~/pyvrp-wheels.tar.gz -C ~/pyvrp-wheels .
+#   scp ~/pyvrp-wheels.tar.gz robahri@narval.alliancecan.ca:~/
+# Then on Narval:
+mkdir -p ~/pyvrp-wheels
+tar -xzf ~/pyvrp-wheels.tar.gz -C ~/pyvrp-wheels
+python -m pip install --no-index --find-links="$HOME/pyvrp-wheels" 'pyvrp==0.14.1'
 python -m pytest -q
 python -c 'import pyvrp; print(pyvrp.__version__)'
 sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
