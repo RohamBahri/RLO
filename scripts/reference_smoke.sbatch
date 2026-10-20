@@ -6,7 +6,7 @@
 #SBATCH --time=00:15:00
 #SBATCH --output=logs/%x_%j.out
 
-cd "$HOME/RLO"
+cd "$HOME/RLO_refs"
 module load python/3.11
 source "$HOME/venvs/rlo/bin/activate"
 set -euo pipefail

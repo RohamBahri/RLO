@@ -7,7 +7,7 @@
 #SBATCH --array=0-17%4
 #SBATCH --output=logs/%x_%A_%a.out
 
-cd "$HOME/RLO"
+cd "$HOME/RLO_refs"
 module load python/3.11
 source "$HOME/venvs/rlo/bin/activate"
 set -euo pipefail

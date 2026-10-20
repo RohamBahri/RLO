@@ -4,7 +4,7 @@ MVP5 is the best saved general policy (~6.64% mean *historical reference* gap ov
 
 **Phase 1:** canonical generator, independent feasible-tour evaluation, fixed data streams, exact n≤12 solution, route-verifiable references, and paired metrics. The archived n=20 OR-Tools costs (means 6.383451, 6.373003 and 6.358619) lack stored tours and used integer/rounded objectives, so are historical only. Freeze stronger n≥20 *route* references using PyVRP or an external solver before tuning; PyVRP 0.14 uses iterated local search, not the older HGS engine.
 
-**Next:** a single masked batched environment and exact cost-to-go from partial states, then zero-training MVP5 sampling and n=10 MBPI diagnostics.
+**Current:** the masked batched environment, exact partial-state oracle, and GPU Group A screening are implemented. Next: route-verified reference datasets, paired evaluation, and trustworthy analysis.
 
 **Research requirements:** See [PRINCIPLES.md](PRINCIPLES.md). Future training must use experience only, on diverse problem instances and settings, with explicit held-out size and parameter shifts. KL policy-improvement targets derived only from the agent's own rollouts are permitted, including KL/cross-entropy projection steps. External solver, expert, and heuristic solution labels remain prohibited. Evaluation references and classical heuristics must never become training labels.
 
