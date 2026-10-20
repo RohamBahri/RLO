@@ -71,7 +71,14 @@ The canonical evaluation generator is `evaluation_instances(n, split, count, cap
 git clone https://github.com/RohamBahri/RLO.git ~/RLO_refs
 cd ~/RLO_refs
 mkdir -p logs
-# Install optional PyVRP 0.14.x in your active environment before submission.
+module load python/3.11
+mkdir -p ~/venvs
+virtualenv --no-download ~/venvs/rlo_refs
+source ~/venvs/rlo_refs/bin/activate
+pip install --no-index -e '.[pyvrp]'
+python -c 'import pyvrp; print(pyvrp.__version__)'
+# If the PyVRP package is unavailable from the Alliance wheelhouse,
+# stop and resolve the installation before submitting jobs.
 sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
 # Inspect successful smoke results before launching all 18 tasks:
 sbatch --account=def-brostami-ab scripts/references_cpu.sbatch
