@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 import numpy as np
 import torch
-from .data import SEEDS, instances
+from .data import evaluation_instances, fingerprint
 from .learning import device_auto, rollout
 from .model import Policy
 from .problem import generate, validate
@@ -67,8 +67,8 @@ def main():
     p.add_argument("--reference", help="route-based frozen reference file (one size and factor only)")
     p.add_argument("--out", help="optional JSON summary")
     args = p.parse_args()
-    if args.reference and (len(args.sizes) != 1 or args.factors != [1.0]):
-        p.error("--reference requires one size and factor 1.0")
+    if args.reference and (len(args.sizes) != 1 or len(args.factors) != 1):
+        p.error("--reference requires one size and one capacity factor")
     if args.multistart and (args.legacy or not args.checkpoint or max(args.k) > min(args.sizes)):
         p.error("--multistart requires a new model checkpoint and k<=min(sizes)")
     if args.legacy and not args.checkpoint:
@@ -81,11 +81,7 @@ def main():
     all_rows = []
     for n in args.sizes:
         for factor in args.factors:
-            if factor == 1.0:
-                cases = instances(n, args.split, args.count)
-            else:
-                rng = np.random.default_rng(SEEDS[args.split] + n * 100003 + round(factor * 1000))
-                cases = [generate(n, rng, capacity_factor=factor) for _ in range(args.count)]
+            cases = evaluation_instances(n, args.split, args.count, factor)
             refs = load(args.reference, cases)[0] if args.reference else None
             for k in args.k if model else [1]:
                 start = time.perf_counter()
@@ -126,6 +122,15 @@ def main():
                            mean_feasible_cost=float(np.mean(lengths)) if lengths else None,
                            mean_feasible_gap_pct=float(np.mean(paired_gaps)) if paired_gaps else None,
                            elapsed_seconds=time.perf_counter() - start)
+                row["instances"] = [
+                    dict(index=i, instance_id=fingerprint(inst),
+                         cost=None if sol is None else float(sol[0]),
+                         feasible=sol is not None,
+                         reference_cost=None if refs is None else float(refs[i]),
+                         gap_pct=None if refs is None or sol is None else
+                         100 * (float(sol[0]) / float(refs[i]) - 1))
+                    for i, (inst, sol) in enumerate(zip(cases, solutions))
+                ]
                 all_rows.append(row)
                 print(json.dumps(row), flush=True)
     if args.out:

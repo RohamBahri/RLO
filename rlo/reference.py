@@ -23,18 +23,19 @@ def load(path, cases):
     return measured, record["method"]
 
 
-def save(path, cases, routes, method, n, split, *, overwrite=False):
+def save(path, cases, routes, method, n, split, *, capacity_factor=1.0, overwrite=False):
     """Freeze Euclidean reference costs together with actual feasible tours."""
-    from .data import instances
+    from .data import evaluation_instances
     path = Path(path)
     if path.exists() and not overwrite:
         raise FileExistsError(f"{path} exists; use overwrite=True to replace it")
     if len(routes) != len(cases) or any(
         fingerprint(a) != fingerprint(b)
-        for a, b in zip(cases, instances(n, split, len(cases)))
+        for a, b in zip(cases, evaluation_instances(n, split, len(cases), capacity_factor))
     ):
         raise ValueError("routes and cases must match the seeded split")
-    record = {"n": n, "split": split, "method": method,
+    record = {"n": n, "split": split, "capacity_factor": capacity_factor,
+              "method": method,
               "fingerprints": [fingerprint(x) for x in cases],
               "routes": [list(map(int, tour)) for tour in routes],
               "costs": [validate(inst, tour) for inst, tour in zip(cases, routes)]}
@@ -53,7 +54,7 @@ def pyvrp_solver(instance, seconds=3, seed=0):
     model.add_vehicle_type(num_available=n, capacity=int(instance["capacity"]))
     for xy, demand in zip(instance["coords"][1:], instance["demands"][1:]):
         model.add_client(location=model.add_location(*map(float, xy)), delivery=int(demand))
-    d = np.rint(distances(instance) * 1_000_000).astype(int)
+    d = np.rint(distances(instance) * 10_000).astype(int)
     for i, frm in enumerate(model.locations):
         for j, to in enumerate(model.locations):
             model.add_edge(frm, to, distance=int(d[i, j]))

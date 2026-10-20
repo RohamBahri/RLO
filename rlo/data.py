@@ -14,6 +14,24 @@ def instances(n, split="validation", count=100):
     return [generate(n, rng) for _ in range(count)]
 
 
+def evaluation_instances(n, split="validation", count=256, capacity_factor=1.0):
+    """Fixed held-out problems. Capacity shifts retain the same nodes and demands.
+
+    factor=1 reproduces the historical validation/test cases exactly.
+    The shifted capacity follows the new generator's f-scaled rule; no
+    solver solutions or learned policy outputs influence these instances.
+    """
+    if not np.isfinite(capacity_factor) or capacity_factor <= 0:
+        raise ValueError("capacity_factor must be finite and positive")
+    cases = instances(n, split, count)
+    if capacity_factor == 1.0:
+        return cases
+    typical_load = 5.5 * n / 3.5
+    return [dict(inst, capacity=max(int(np.max(inst["demands"][1:])),
+                                    round(typical_load * capacity_factor)))
+            for inst in cases]
+
+
 def fingerprint(instance):
     """Stable ID for preventing accidental reference/instance mismatches."""
     c = np.asarray(instance["coords"], dtype="<f4")

@@ -60,3 +60,30 @@ python -m scripts.curves results/arch_n10 --out results/plots_n10
 ```
 
 Validation always records single-start greedy; POMO also records all-start greedy. For a **fair all-start primary** across all methods, pass both `--validation-multistart --selection-metric multistart` (more costly). Architecture should only be frozen after confirming any difference across seeds. Group A LR screening defaults to **10M transitions**, not 1M.
+
+## Held-out references and Group A analysis (October 2026)
+
+The canonical evaluation generator is `evaluation_instances(n, split, count, capacity_factor)`. Changed-capacity scenarios keep coordinates and demands fixed; capacity factor 1 retains historical evaluation cases. PyVRP 0.14.x search now scales integer distances by 10,000 while scoring all tours in the original Euclidean metric.
+
+**Do not update the active `~/RLO` checkout while GPU Slurm array 6564009 is running.** Make a separate cluster checkout for CPU reference tasks:
+
+```bash
+git clone https://github.com/RohamBahri/RLO.git ~/RLO_refs
+cd ~/RLO_refs
+mkdir -p logs
+# Install optional PyVRP 0.14.x in your active environment before submission.
+sbatch --account=def-brostami-ab scripts/reference_smoke.sbatch
+# Inspect successful smoke results before launching all 18 tasks:
+sbatch --account=def-brostami-ab scripts/references_cpu.sbatch
+```
+
+All reference JSON files are written to `$SCRATCH/RLO_references` and store verified tours, fingerprints and capacity factors. Copy finished datasets to permanent storage. For n=10/12 references are exact; for larger n they are multiseed heuristic upper bounds. Test references can be frozen now, but cannot be used for model selection.
+
+After Group A completes:
+
+```bash
+python -m scripts.group_a_report "$SCRATCH/RLO_runs/group_a_gpu" --out "$SCRATCH/RLO_runs/group_a_analysis"
+python -m scripts.curves "$SCRATCH/RLO_runs/group_a_gpu" --out "$SCRATCH/RLO_runs/group_a_curves"
+```
+
+The report uses the final single-start greedy validation cost divided by sqrt(n), averaged across n=10/20/30 and three seeds, to select learning rates. It retains per-seed costs, optimizer update counts and training time. `rlo.study --out` now includes per-instance cost/fingerprint records for paired evaluation.
