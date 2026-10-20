@@ -7,12 +7,18 @@
 #SBATCH --array=0-17%4
 #SBATCH --output=logs/%x_%A_%a.out
 
-cd "$HOME/RLO_refs"
-module load python/3.11
-source "$HOME/venvs/rlo_refs/bin/activate"
 set -euo pipefail
-export OMP_NUM_THREADS=2
-export OPENBLAS_NUM_THREADS=1
+module load StdEnv/2023 apptainer/1.4.5
+BASE="$SCRATCH/RLO_container"
+cd "$BASE/src"
+export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+
+run_py() {
+  srun --cpu-bind=cores apptainer exec --cleanenv \
+    --bind "$SCRATCH:$SCRATCH" --pwd "$BASE/src" \
+    --env OMP_NUM_THREADS=2,OPENBLAS_NUM_THREADS=1 \
+    "$BASE/python311.sif" "$BASE/venv/bin/python" "$@"
+}
 
 # 9 scenarios x 2 splits = 18 independent CPU tasks.
 sizes=(10 12 20 25 30 40 50 20 20)
@@ -32,7 +38,7 @@ if [[ -e "$out" ]]; then
   exit 1
 fi
 
-srun --cpu-bind=cores python -m scripts.freeze_references \
+run_py -m scripts.freeze_references \
   --n "$n" --split "$split" --capacity-factor "$factor" \
   --count 256 --method "$method" --seconds 3 --seeds 0 1 2 \
   --output "$out"
