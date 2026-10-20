@@ -19,4 +19,4 @@ ortools = ["ortools"]
 pyvrp = ["pyvrp>=0.14,<0.15"]
 
 [tool.setuptools.packages.find]
-include = ["rlo*"]
+include = ["rlo*", "scripts*"]
