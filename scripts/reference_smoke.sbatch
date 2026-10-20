@@ -12,7 +12,7 @@ source "$HOME/venvs/rlo_refs/bin/activate"
 set -euo pipefail
 export OMP_NUM_THREADS=2
 export OPENBLAS_NUM_THREADS=1
-python -c 'import pyvrp; print("PyVRP available:", pyvrp.__version__)'
+python -c 'from importlib.metadata import version; print("PyVRP:", version("pyvrp"))'
 for n in 10 20 50; do
   for factor in 0.5 1.5; do
     srun --cpu-bind=cores python -m scripts.freeze_references \

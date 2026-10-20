@@ -47,6 +47,7 @@ cd ~/RLO_refs
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[test,pyvrp]'
+python -c "from importlib.metadata import version; print(version('pyvrp'))"
 python -m pytest -q
 
 mkdir -p results/reference_smoke
