@@ -167,13 +167,13 @@ def main():
             p.error("history does not contain the checkpoint iteration")
         if len(retained) != len(raw_records):
             temp = history_path.with_suffix(".jsonl.tmp")
-            temp.write_text("".join(json.dumps(line) + "\\n" for line in retained))
+            temp.write_text("".join(json.dumps(line) + "\n" for line in retained))
             os.replace(temp, history_path)
     else:
         if directory.exists() and any(directory.iterdir()):
             p.error(f"{directory} is not empty; choose a new --out")
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "config.json").write_text(json.dumps(recorded_config, indent=2) + "\\n")
+        (directory / "config.json").write_text(json.dumps(recorded_config, indent=2) + "\n")
     start = time.perf_counter()
 
     def save_campaign_checkpoint(iteration, elapsed):
