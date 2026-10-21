@@ -63,7 +63,11 @@ else
     printf "%s\n" "$RLO_CAMPAIGN_SHA" > "$out/commit.txt"
 fi
 
-srun python -c 'import torch; assert torch.cuda.is_available(), "CUDA GPU required"'
+# Run a real A100 forward/backward pass at the planned model and batch size.
+# This tests CUDA, autograd, masked environment and POMO multi-start before 50M.
+srun --cpu-bind=cores python -m rlo.campaign_preflight \
+    --method "$method" --batch "$batch" --width 128 --layers 2 \
+    --n 30 --device cuda
 srun --cpu-bind=cores python -m rlo.campaign_train \
     --method "$method" --sizes 10 20 30 \
     --capacity-factors 0.75 1.25 --demand-maxes 10 \
