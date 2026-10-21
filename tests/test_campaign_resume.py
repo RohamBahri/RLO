@@ -97,3 +97,38 @@ def test_incompatible_resume_rejected(tmp_path):
                               capture_output=True, text=True, env=env)
     assert rejected.returncode != 0
     assert "CLI settings differ" in rejected.stderr
+
+
+def test_provenance_only_directory_accepted_but_history_protected(tmp_path):
+    directory = tmp_path / "pre_stamped"
+    directory.mkdir()
+    (directory / "commit.txt").write_text("a pinned commit\n")
+    args = [
+        sys.executable, "-m", "rlo.campaign_train",
+        "--method", "reinforce", "--sizes", "4", "--width", "16", "--layers", "1",
+        "--batch", "2", "--device", "cpu", "--max-transitions", "40",
+        "--validation-count", "2", "--out", str(directory),
+    ]
+    env = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
+    run = subprocess.run(args, capture_output=True, text=True, env=env)
+    assert run.returncode == 0, run.stderr
+    assert (directory / "commit.txt").read_text() == "a pinned commit\n"
+    assert (directory / "last.pt").is_file()
+    assert (directory / "history.jsonl").is_file()
+    rerun = subprocess.run(args, capture_output=True, text=True, env=env)
+    assert rerun.returncode != 0
+    assert "already contains experiment data" in rerun.stderr
+
+def test_extra_files_in_provenance_only_directory_rejected(tmp_path):
+    directory = tmp_path / "pre_stamped"
+    directory.mkdir()
+    (directory / "commit.txt").write_text("a pinned commit\n")
+    (directory / "do_not_overwrite.txt").write_text("important\n")
+    run = subprocess.run([
+        sys.executable, "-m", "rlo.campaign_train", "--sizes", "4",
+        "--width", "16", "--layers", "1", "--batch", "2",
+        "--max-transitions", "40", "--validation-count", "2",
+        "--out", str(directory),
+    ], capture_output=True, text=True, env=dict(os.environ, OMP_NUM_THREADS="1"))
+    assert run.returncode != 0
+    assert (directory / "do_not_overwrite.txt").read_text() == "important\n"
