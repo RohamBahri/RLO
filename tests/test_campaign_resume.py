@@ -1,5 +1,6 @@
 """Correctness gates for long-run campaign checkpoint and data-stream resume."""
 import os
+import json
 import subprocess
 import sys
 
@@ -64,6 +65,12 @@ def test_campaign_resume_identical_to_uninterrupted_cpu(method, tmp_path):
     execute("--out", str(continuous))
     execute("--out", str(split), "--stop-after-transitions", "70")
     execute("--out", str(split), "--resume", str(split / "last.pt"))
+    expected_history = [json.loads(line) for line in (continuous / "history.jsonl").read_text().splitlines()]
+    actual_history = [json.loads(line) for line in (split / "history.jsonl").read_text().splitlines()]
+    assert len(expected_history) == len(actual_history), (method, len(expected_history), len(actual_history))
+    for x, y in zip(expected_history, actual_history):
+        for key in ("iteration", "transitions_total", "baseline_accepted", "mean_cost", "loss"):
+            assert x.get(key) == y.get(key), (method, key, x.get("iteration"), x.get(key), y.get(key))
     lhs = torch.load(continuous / "last.pt", map_location="cpu", weights_only=True)
     rhs = torch.load(split / "last.pt", map_location="cpu", weights_only=True)
     for field in ("model", "optimizer", "rollout_baseline", "training_stream_rng",
