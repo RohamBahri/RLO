@@ -47,11 +47,12 @@ def check_same(a, b):
 
 @pytest.mark.parametrize("method", ["reinforce", "rollout", "a2c", "pomo"])
 def test_campaign_resume_identical_to_uninterrupted_cpu(method, tmp_path):
+    budget = 700 if method == "rollout" else 140
     common = [
         sys.executable, "-m", "rlo.campaign_train",
         "--method", method, "--sizes", "4", "--width", "16", "--layers", "1",
         "--batch", "2", "--lr", "0.0003", "--seed", "9", "--device", "cpu",
-        "--max-transitions", "140", "--validation-count", "2",
+        "--max-transitions", str(budget), "--validation-count", "2",
         "--validate-every", "1000000", "--validate-every-transitions", "90",
         "--checkpoint-every-transitions", "25",
         "--milestones", "40", "80", "120",
@@ -77,7 +78,7 @@ def test_campaign_resume_identical_to_uninterrupted_cpu(method, tmp_path):
                   "pomo_rng", "ema_by_size", "python_rng", "torch_cpu_rng",
                   "transitions_total", "episodes_total", "iteration"):
         check_same(lhs[field], rhs[field])
-    assert lhs["transitions_total"] >= 140
+    assert lhs["transitions_total"] >= budget
     for path in (continuous, split):
         assert (path / "milestone_40.pt").exists()
         assert (path / "milestone_80.pt").exists()
