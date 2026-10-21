@@ -174,6 +174,12 @@ def main():
             p.error(f"{directory} is not empty; choose a new --out")
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "config.json").write_text(json.dumps(recorded_config, indent=2) + "\n")
+    # A completed checkpoint is a no-op. Never perform one extra optimizer
+    # update when a previously interrupted job already crossed its budget.
+    if args.resume and (start_iteration >= max_updates or
+                        (args.max_transitions is not None and transitions >= args.max_transitions)):
+        print(f"Already complete: iteration={start_iteration}, transitions={transitions}", flush=True)
+        return
     start = time.perf_counter()
 
     def save_campaign_checkpoint(iteration, elapsed):
