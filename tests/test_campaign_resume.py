@@ -67,7 +67,7 @@ def test_campaign_resume_identical_to_uninterrupted_cpu(method, tmp_path):
     execute("--out", str(split), "--resume", str(split / "last.pt"))
     expected_history = [json.loads(line) for line in (continuous / "history.jsonl").read_text().splitlines()]
     actual_history = [json.loads(line) for line in (split / "history.jsonl").read_text().splitlines()]
-    assert len(expected_history) == len(actual_history), (method, len(expected_history), len(actual_history))
+    assert len(expected_history) == len(actual_history), (method, [(r["iteration"], r["transitions_total"], r.get("baseline_check_transitions")) for r in expected_history], [(r["iteration"], r["transitions_total"], r.get("baseline_check_transitions")) for r in actual_history])
     for x, y in zip(expected_history, actual_history):
         for key in ("iteration", "transitions_total", "baseline_accepted", "mean_cost", "loss"):
             assert x.get(key) == y.get(key), (method, key, x.get("iteration"), x.get(key), y.get(key))
