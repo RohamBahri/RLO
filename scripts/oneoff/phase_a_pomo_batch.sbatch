@@ -22,7 +22,7 @@ export PYTHONUNBUFFERED=1
 root="$SCRATCH/RLO_runs/group_a_gpu"
 expected="$(cat "$root/pomo_w128_plain_lr0.0003_seed0/commit.txt")"
 for seed in 1 2; do
-    [[ "$(cat "$root/pomo_w128_plain_lr0.0003_seed\${seed}/commit.txt")" == "$expected" ]] || {
+    [[ "$(cat "$root/pomo_w128_plain_lr0.0003_seed${seed}/commit.txt")" == "$expected" ]] || {
         echo "Group A POMO checkpoints were produced by different commits" >&2
         exit 2
     }
@@ -39,7 +39,7 @@ actual="$(git rev-parse HEAD)"
 
 i="$SLURM_ARRAY_TASK_ID"
 if (( i < 3 )); then batch=8; seed="$i"; else batch=4; seed="$((i-3))"; fi
-out="$SCRATCH/RLO_runs/phase_a_pomo_batch/pomo_b\${batch}_seed\${seed}"
+out="$SCRATCH/RLO_runs/phase_a_pomo_batch/pomo_b${batch}_seed${seed}"
 [[ ! -e "$out" ]] || { echo "Output already exists: $out" >&2; exit 1; }
 mkdir -p "$out"
 echo "$actual" > "$out/commit.txt"
@@ -58,6 +58,6 @@ for n in 10 20 30; do
     srun --cpu-bind=cores python -m rlo.study \
       --checkpoint "$out/last.pt" --split validation \
       --sizes "$n" --count 256 --k "$n" --multistart \
-      --seed 0 --out "$out/multistart_n\${n}.json"
+      --seed 0 --out "$out/multistart_n${n}.json"
 done
 echo "DONE POMO batch=$batch seed=$seed commit=$actual"
