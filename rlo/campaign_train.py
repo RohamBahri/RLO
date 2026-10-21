@@ -170,8 +170,11 @@ def main():
             temp.write_text("".join(json.dumps(line) + "\n" for line in retained))
             os.replace(temp, history_path)
     else:
-        if directory.exists() and any(directory.iterdir()):
-            p.error(f"{directory} is not empty; choose a new --out")
+        existing = {entry.name for entry in directory.iterdir()} if directory.exists() else set()
+        if existing - {"commit.txt"}:
+            p.error(f"{directory} already contains experiment data: {sorted(existing)}")
+        if "commit.txt" in existing and not (directory / "commit.txt").is_file():
+            p.error("commit.txt must be a regular file")
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "config.json").write_text(json.dumps(recorded_config, indent=2) + "\n")
     # A completed checkpoint is a no-op. Never perform one extra optimizer
