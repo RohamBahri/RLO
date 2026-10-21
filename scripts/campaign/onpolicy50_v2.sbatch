@@ -41,16 +41,26 @@ resume=()
 if [[ -e "$out" ]]; then
     if [[ "${RLO_RESUME:-0}" == 1 && -f "$out/last.pt" ]]; then
         resume=(--resume "$out/last.pt")
-        [[ "$(cat "$out/commit.txt")" == "$RLO_CAMPAIGN_SHA" ]] || {
-            echo "Output originated from a different source commit" >&2; exit 2;
+        [[ "$(cat "$out/commit.txt")" == "$RLO_CAMPAIGN_SHA" ]] || exit 2
+    elif [[ "${RLO_RESUME:-0}" != 1 && -d "$out" && -f "$out/commit.txt" ]]; then
+        shopt -s nullglob dotglob
+        entries=("$out"/*)
+        shopt -u nullglob dotglob
+        [[ ${#entries[@]} -eq 1 && "${entries[0]##*/}" == commit.txt ]] || {
+            echo "Output has experiment data; refusing to overwrite $out" >&2; exit 1;
         }
+        old="$(cat "$out/commit.txt")"
+        [[ "$old" == "$RLO_CAMPAIGN_SHA" || "$old" == "4f29388c3e16f07caa051bad0cf99c9b7b086af6" ]] || {
+            echo "Unexpected provenance: $old" >&2; exit 2;
+        }
+        printf "%s\n" "$RLO_CAMPAIGN_SHA" > "$out/commit.txt"
+        echo "Reusing commit-only directory $out"
     else
-        echo "Output exists. For an interrupted run, resubmit with RLO_RESUME=1." >&2
-        exit 1
+        echo "Cannot overwrite nonempty run without exact resume checkpoint: $out" >&2; exit 1;
     fi
 else
     mkdir -p "$out"
-    printf '%s\n' "$RLO_CAMPAIGN_SHA" > "$out/commit.txt"
+    printf "%s\n" "$RLO_CAMPAIGN_SHA" > "$out/commit.txt"
 fi
 
 srun python -c 'import torch; assert torch.cuda.is_available(), "CUDA GPU required"'
