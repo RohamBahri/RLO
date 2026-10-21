@@ -66,3 +66,35 @@ def training_batches(seed=0, *, batch=32, sizes=(10, 20, 30),
         n = int(rng.choice(sizes))
         yield [generate(n, rng, capacity_factor=float(rng.uniform(*capacity_factors)),
                         demand_max=int(rng.choice(demand_maxes))) for _ in range(batch)]
+
+
+class StatefulTrainingBatches:
+    """Reproducible, exactly restorable independent-instance batch stream."""
+
+    def __init__(self, seed=0, *, batch=32, sizes=(10, 20, 30),
+                 capacity_factors=(0.75, 1.25), demand_maxes=(10,)):
+        if batch < 1 or not sizes or not demand_maxes or capacity_factors[0] <= 0 or capacity_factors[0] > capacity_factors[1]:
+            raise ValueError("invalid batch or generation settings")
+        self.batch = batch
+        self.sizes = tuple(sizes)
+        self.capacity_factors = tuple(capacity_factors)
+        self.demand_maxes = tuple(demand_maxes)
+        self.rng = np.random.default_rng(seed)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        n = int(self.rng.choice(self.sizes))
+        return [generate(n, self.rng,
+                         capacity_factor=float(self.rng.uniform(*self.capacity_factors)),
+                         demand_max=int(self.rng.choice(self.demand_maxes)))
+                for _ in range(self.batch)]
+
+    def state_dict(self):
+        import copy
+        return copy.deepcopy(self.rng.bit_generator.state)
+
+    def load_state_dict(self, state):
+        import copy
+        self.rng.bit_generator.state = copy.deepcopy(state)
