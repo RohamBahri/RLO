@@ -61,17 +61,18 @@ def test_campaign_startup_full_episode_and_checkpoint(method, tmp_path):
     assert (dest / "commit.txt").read_text() == "smoke-test-pinned-commit\n"
 
 
-def test_campaign_production_like_pomo_startup(tmp_path):
-    """One true production-style update with mixed-size evaluation and 128 width."""
-    dest = tmp_path / "pomo_production"
+@pytest.mark.parametrize("method,batch", [("reinforce", 32), ("rollout", 32), ("a2c", 32), ("pomo", 16)])
+def test_campaign_production_like_startup(method, batch, tmp_path):
+    """One full-shape update with real CLI settings and cross-size validation."""
+    dest = tmp_path / f"{method}_production"
     dest.mkdir()
     (dest / "commit.txt").write_text("smoke-test-pinned-commit\n")
     cmd = [
         sys.executable, "-m", "rlo.campaign_train",
-        "--method", "pomo", "--sizes", "10", "20", "30",
+        "--method", method, "--sizes", "10", "20", "30",
         "--capacity-factors", "0.75", "1.25", "--demand-maxes", "10",
         "--width", "128", "--layers", "2", "--device", "cpu",
-        "--batch", "2", "--lr", "0.0003", "--seed", "0",
+        "--batch", str(batch), "--lr", "0.0003", "--seed", "0",
         "--max-transitions", "50000000",
         "--stop-after-transitions", "1",
         "--validate-every", "100000000",
@@ -92,6 +93,19 @@ def test_campaign_production_like_pomo_startup(tmp_path):
     assert row["transitions_total"] >= 1 and row["iteration"] == 1
     for n in ("10", "20", "30"):
         assert row["validation"][n]["feasible"] == 1.0
-        assert row["validation"][n]["multistart_cost"] <= row["validation"][n]["cost"] + 1e-8
+        if method == "pomo":
+            assert row["validation"][n]["multistart_cost"] <= row["validation"][n]["cost"] + 1e-8
     assert (dest / "last.pt").is_file()
     assert (dest / "config.json").is_file()
+
+
+@pytest.mark.parametrize("method,batch", [("reinforce", 2), ("rollout", 2), ("a2c", 2), ("pomo", 2)])
+def test_preflight_real_cpu_step(method, batch):
+    result = subprocess.run([
+        sys.executable, "-m", "rlo.campaign_preflight",
+        "--method", method, "--batch", str(batch),
+        "--width", "16", "--layers", "1", "--n", "5", "--device", "cpu"
+    ], text=True, capture_output=True,
+       env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert "PREFLIGHT_OK" in result.stdout
