@@ -181,7 +181,7 @@ def main():
         return counters["real_moves"] + counters["dyna_moves"]
 
     if counters["real_moves"] >= args.max_real_transitions:
-        print(f"Already complete: {counters[\'real_moves\']:,} fresh physical moves")
+        print("Already complete: {:,} fresh physical moves".format(counters["real_moves"]))
         return
 
     begin = time.perf_counter()
@@ -288,7 +288,7 @@ def main():
                 moves - counters["last_checkpoint_moves"] >= args.checkpoint_every_transitions):
                 checkpoint(moves)
             if stop or interrupted:
-                print(f"STOP method={args.method} moves={moves} updates={counters['optimizer_updates']}",
+                print("STOP method={} fresh_moves={} sim_moves={} updates={}".format(args.method, moves, sim_count(), counters["optimizer_updates"]), flush=True)
                       flush=True)
                 break
 
