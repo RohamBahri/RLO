@@ -160,7 +160,8 @@ def main():
 
     def checkpoint(moves):
         counters["last_checkpoint_moves"] = moves
-        counters["elapsed_seconds"] += time.perf_counter() - begin
+        elapsed_before = counters["elapsed_seconds"]
+        counters["elapsed_seconds"] = elapsed_before + time.perf_counter() - begin
         state = dict(wave2_format=1, config=config, model=model.state_dict(),
                      target=target.state_dict(), optimizer=opt.state_dict(),
                      replay=replay, stream=stream.state_dict(),
@@ -169,7 +170,7 @@ def main():
                      cuda_rng=torch.cuda.get_rng_state_all() if args.device == "cuda" else None,
                      python_rng=random.getstate(), counters=copy.deepcopy(counters))
         save_atomic(state, out / "resume.pt")
-        counters["elapsed_seconds"] -= time.perf_counter() - begin
+        counters["elapsed_seconds"] = elapsed_before
         eval_model = dict(model=model.state_dict(), architecture=arch, architecture_version=2,
                           iteration=counters["iteration"],
                           simulator_transitions=moves, method=args.method)
