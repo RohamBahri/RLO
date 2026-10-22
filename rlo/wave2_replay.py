@@ -122,58 +122,81 @@ def simulate(snapshot, action, synthetic=False):
 
 
 def dyna_from_real(replay, rng, count, n_step=1, model=None, epsilon=0.1):
-    """Counterfactual root actions sampled only from REAL visited states.
+    """Counterfactual rollouts from REAL roots, with cached batched encodings.
 
-    With n_step > 1, later simulated actions are current epsilon-greedy
-    policy actions. All physical moves, including forced moves, count against
-    Dyna simulation cost. The n-step target uses uncorrected off-policy returns.
+    n-step simulated returns are uncorrected off-policy behavior returns.
+    Every physical move is charged to Dyna, including automatic forced moves.
     """
     if count < 0 or n_step < 1 or (n_step > 1 and model is None):
-        raise ValueError("invalid counterfactual count or n_step")
-    generated = []
-    was_training = model.training if model is not None else False
-    if model is not None:
+        raise ValueError("invalid count/n-step for counterfactuals")
+    roots = []
+    for _ in range(count):
+        obs = replay.real_sample(rng)
+        legal = np.flatnonzero(obs.before.restore().legal())
+        alternatives = legal[legal != obs.action]
+        if not len(alternatives):
+            raise AssertionError("no alternative counterfactual action")
+        roots.append((obs.before, int(rng.choice(alternatives))))
+    if n_step == 1:
+        results = [simulate(s, act, synthetic=True) for s, act in roots]
+    else:
+        previous_mode = model.training
         model.eval()
-    try:
-        with torch.no_grad():
-            for _ in range(count):
-                observed = replay.real_sample(rng)
-                env = observed.before.restore()
-                alternatives = np.flatnonzero(env.legal())
-                alternatives = alternatives[alternatives != observed.action]
-                if not len(alternatives):
-                    raise AssertionError("counterfactual must have alternative legal action")
-                first = int(rng.choice(alternatives))
-                action = first
-                reward, moves, steps = 0.0, 0, 0
-                for step_idx in range(n_step):
-                    previous = len(env.tour)
-                    r, done = env.step(action)
-                    reward += float(r)
-                    moves += len(env.tour) - previous
-                    steps += 1
-                    if done:
-                        break
-                    if step_idx + 1 < n_step:
-                        options = np.flatnonzero(env.legal())
-                        if rng.random() < epsilon:
-                            action = int(rng.choice(options))
-                        else:
-                            dev = next(model.parameters()).device
-                            data = [torch.as_tensor(z, device=dev)
-                                    for z in observations([Snapshot.take(env)])]
-                            q, _ = model(*data)
-                            action = int(q.argmax(-1).item())
-                result = Transition(
-                    observed.before, first, reward,
-                    None if env.done else Snapshot.take(env),
-                    moves, synthetic=True, n_steps=steps)
-                replay.add(result)
-                generated.append(result)
-    finally:
-        if model is not None:
-            model.train(was_training)
-    return generated
+        try:
+            results = []
+            groups = {}
+            for s, act in roots:
+                groups.setdefault(len(s.instance["demands"]), []).append((s, act))
+            with torch.no_grad():
+                for group in groups.values():
+                    # Keep each GPU encode bounded; encode static graph ONCE
+                    # and decode at most n_step-1 additional policy decisions.
+                    for offset in range(0, len(group), 96):
+                        work = group[offset:offset + 96]
+                        initial = observations([s for s, _ in work])
+                        dev = next(model.parameters()).device
+                        static = model.encode(torch.as_tensor(initial[0], device=dev),
+                                              torch.as_tensor(initial[2], device=dev))
+                        envs = [s.restore() for s, _ in work]
+                        actions = [act for _, act in work]
+                        rewards = [0.0] * len(work)
+                        moves = [0] * len(work)
+                        steps = [0] * len(work)
+                        for level in range(n_step):
+                            for j, env in enumerate(envs):
+                                if env.done:
+                                    continue
+                                before = len(env.tour)
+                                r, _ = env.step(actions[j])
+                                rewards[j] += float(r)
+                                moves[j] += len(env.tour) - before
+                                steps[j] += 1
+                            if level + 1 == n_step:
+                                break
+                            active = [j for j, env in enumerate(envs) if not env.done]
+                            if not active:
+                                break
+                            nxt = observations([Snapshot.take(envs[j]) for j in active])
+                            q, _ = model.decode(
+                                static[active], torch.as_tensor(nxt[0], device=dev),
+                                torch.as_tensor(nxt[1], device=dev),
+                                torch.as_tensor(nxt[3], device=dev))
+                            greedy = q.argmax(-1).cpu().numpy()
+                            for k, j in enumerate(active):
+                                opts = np.flatnonzero(nxt[3][k])
+                                actions[j] = (int(rng.choice(opts)) if rng.random() < epsilon
+                                              else int(greedy[k]))
+                        for j, (snap, first) in enumerate(work):
+                            env = envs[j]
+                            results.append(Transition(
+                                snap, first, rewards[j],
+                                None if env.done else Snapshot.take(env),
+                                moves[j], synthetic=True, n_steps=steps[j]))
+        finally:
+            model.train(previous_mode)
+    for t in results:
+        replay.add(t)
+    return results
 
 def collect_real(model, instances, replay, rng, epsilon=0.1, n_step=1):
     """Batched epsilon-greedy self-experience with one static encoding per case."""
