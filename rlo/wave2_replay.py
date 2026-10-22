@@ -72,7 +72,7 @@ class Replay:
         self.synthetic = {}
 
     def add(self, transition):
-        if transition.physical_moves < 1 or transition.reward > 1e-10:
+        if transition.physical_moves < 1 or transition.n_steps < 1 or transition.reward > 1e-10:
             raise ValueError("invalid CVRP travel reward or transition length")
         store = self.synthetic if transition.synthetic else self.real
         store.setdefault(transition.n, deque(maxlen=self.capacity_per_size)).append(transition)
@@ -248,7 +248,26 @@ def observations(snapshots):
         raise ValueError("empty observation batch")
     if len({len(s.instance["demands"]) for s in snapshots}) != 1:
         raise ValueError("mixed-size replay mini-batch")
-    rows = [s.restore().observe() for s in snapshots]
+    rows = []
+    for s in snapshots:
+        inst = s.instance
+        demands = inst["demands"]
+        capacity = float(inst["capacity"])
+        n = len(demands)
+        nodes = np.zeros((n, 6), dtype=np.float32)
+        nodes[:, :2] = inst["coords"]
+        nodes[:, 2] = demands / capacity
+        nodes[0, 3] = 1.0
+        nodes[:, 4] = s.visited
+        nodes[s.current, 5] = 1.0
+        glob = np.asarray([s.load / capacity, 1.0 / (n - 1)], dtype=np.float32)
+        coords = inst["coords"].astype(np.float64)
+        dist = np.linalg.norm(coords[:, None] - coords[None, :], axis=-1).astype(np.float32)
+        legal = (~s.visited) & (s.load + demands <= capacity)
+        legal[0] = s.current != 0
+        if legal.sum() < 2:
+            raise AssertionError("replay observation is not a decision state")
+        rows.append((nodes, glob, dist, legal))
     return tuple(np.stack([r[j] for r in rows]) for j in range(4))
 
 
