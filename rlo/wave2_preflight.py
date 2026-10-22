@@ -36,7 +36,10 @@ def main():
     target = Policy(width=args.width, layers=args.layers, logit_clip=None).to(args.device)
     target.load_state_dict(model.state_dict())
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0003)
-    replay = Replay(capacity_per_size=max(128, args.batch))
+    # The preflight verifies ALL collected decisions, so its circular buffer
+    # must not evict early ones. A CVRP episode has at most n customer visits
+    # and at most n optional depot returns as policy decisions.
+    replay = Replay(capacity_per_size=max(128, 2 * args.batch * (args.n + 1)))
     actual, envs = collect_real(model, instances, replay, rng, epsilon=0.4, n_step=args.n_step)
     if args.method == "dyna":
         synthetics = dyna_from_real(replay, rng, len(actual), n_step=args.n_step, model=model, epsilon=.4)
@@ -47,7 +50,9 @@ def main():
         raise AssertionError(result)
     if args.device == "cuda":
         torch.cuda.synchronize()
-    assert replay.real_count() == len(actual)
+    assert replay.real_count() == len(actual), (
+        f"Unexpected preflight eviction: retained={replay.real_count()} "
+        f"collected={len(actual)} capacity_per_size={replay.capacity_per_size}")
     assert all(env.done and not env.infeasible for env in envs)
     print(f"WAVE2_PREFLIGHT_OK method={args.method} n={args.n} "
           f"batch={args.batch} nstep={args.n_step} transitions={sum(t.physical_moves for t in actual)} "
