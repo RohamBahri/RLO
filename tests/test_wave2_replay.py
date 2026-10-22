@@ -202,3 +202,24 @@ def test_matched_epsilon_and_replay_allocation():
     a, remainder = allocated_updates(8, 500, 73)
     b, remainder = allocated_updates(8, 500, 73, remainder)
     assert (a+b)==int(2*8*573/500)
+
+
+@pytest.mark.parametrize("method", ["ddqn", "dyna"])
+@pytest.mark.parametrize("n_step", [1, 3])
+def test_full_production_shape_preflight_cpu(method, n_step):
+    """Exercise actual n=30 width=128 batch=32 on CPU, not a tiny toy case.
+
+    This does not prove cluster CUDA compatibility. It catches shape- and
+    problem-size-specific runtime defects before requesting another GPU.
+    """
+    command = [
+        sys.executable, "-m", "rlo.wave2_preflight",
+        "--method", method, "--n-step", str(n_step),
+        "--n", "30", "--width", "128", "--layers", "2",
+        "--batch", "32", "--replay-batch", "64", "--device", "cpu"
+    ]
+    result = subprocess.run(
+        command, capture_output=True, text=True, timeout=240,
+        env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert "WAVE2_PREFLIGHT_OK" in result.stdout
