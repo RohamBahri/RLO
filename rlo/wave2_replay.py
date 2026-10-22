@@ -54,6 +54,7 @@ class Transition:
     after: Snapshot | None
     physical_moves: int
     synthetic: bool = False
+    n_steps: int = 1
 
     @property
     def n(self):
@@ -143,10 +144,10 @@ def dyna_from_real(replay, rng, count):
     return transitions
 
 
-def collect_real(model, instances, replay, rng, epsilon=0.1):
+def collect_real(model, instances, replay, rng, epsilon=0.1, n_step=1):
     """Batched epsilon-greedy self-experience with one static encoding per case."""
-    if not 0 <= epsilon <= 1:
-        raise ValueError("epsilon must be in [0,1]")
+    if not 0 <= epsilon <= 1 or n_step < 1:
+        raise ValueError("epsilon must be in [0,1] and n_step >= 1")
     batch = BatchCVRP(instances)
     device = next(model.parameters()).device
     previous_mode = model.training
@@ -175,14 +176,39 @@ def collect_real(model, instances, replay, rng, epsilon=0.1):
                 t = Transition(state, action, float(reward),
                                None if done else Snapshot.take(env),
                                len(env.tour) - before_moves, synthetic=False)
-                replay.add(t)
                 collected.append(t)
     model.train(previous_mode)
     for env in batch.envs:
         if not env.done or env.infeasible:
             raise AssertionError("infeasible/unfinished experience")
         env.finish()  # independently checks cumulative travel cost and constraints
+    for t in n_step_real_targets(collected, n_step):
+        replay.add(t)
     return collected, batch.envs
+
+
+def n_step_real_targets(transitions, n_step):
+    """One replay target per REAL decision, truncated at episode end.
+
+    Physical moves stored on each item refer only to its first decision.
+    Summing overlapping n-step rewards would double-count fresh experience.
+    """
+    if n_step < 1:
+        raise ValueError("n_step must be positive")
+    episodes = {}
+    for t in transitions:
+        episodes.setdefault(id(t.before.instance), []).append(t)
+    results = []
+    for episode in episodes.values():
+        for i, t in enumerate(episode):
+            seq = episode[i:i + n_step]
+            if any(z.after is None for z in seq[:-1]):
+                raise AssertionError("terminal transition inside n-step path")
+            results.append(Transition(
+                t.before, t.action, float(sum(z.reward for z in seq)),
+                seq[-1].after, t.physical_moves, synthetic=False,
+                n_steps=len(seq)))
+    return results
 
 
 def observations(snapshots):
