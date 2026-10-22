@@ -5,10 +5,10 @@
 #SBATCH --mem=24G
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=24:00:00
-#SBATCH --array=0-11%2
+#SBATCH --array=0-17%2
 #SBATCH --output=logs/%x_%A_%a.out
 
-# Twelve substantive runs: DDQN and known-model Dyna, nstep=1,3, 3 seeds.
+# Eighteen runs: DDQN, DDQN with matched updates, and known-model Dyna, nstep=1,3, 3 seeds.
 # 50M FRESH CVRP physical moves per run. Extra Dyna simulations are ADDITIONAL.
 # Separate real/model move counts, replay samples, and optimizer updates.
 set -euo pipefail
@@ -31,13 +31,15 @@ id="$SLURM_ARRAY_TASK_ID"
 arm=$((id / 3))
 seed=$((id % 3))
 case "$arm" in
-  0) method=ddqn; nstep=1 ;;
-  1) method=dyna; nstep=1 ;;
-  2) method=ddqn; nstep=3 ;;
-  3) method=dyna; nstep=3 ;;
-  *) echo "Unknown array task $id" >&2; exit 2 ;;
+  0) method=ddqn; nstep=1; updates=8; tag=ddqn ;;
+  1) method=ddqn; nstep=1; updates=16; tag=ddqn_2x ;;
+  2) method=dyna; nstep=1; updates=8; tag=dyna ;;
+  3) method=ddqn; nstep=3; updates=8; tag=ddqn ;;
+  4) method=ddqn; nstep=3; updates=16; tag=ddqn_2x ;;
+  5) method=dyna; nstep=3; updates=8; tag=dyna ;;
+  *) echo "Unknown task $id" >&2; exit 2 ;;
 esac
-out="$SCRATCH/RLO_runs/campaign_wave2_replay50/${method}_nstep${nstep}_seed${seed}"
+out="$SCRATCH/RLO_runs/campaign_wave2_replay50/${tag}_nstep${nstep}_seed${seed}"
 resume=()
 if [[ -e "$out" ]]; then
   if [[ "${RLO_RESUME:-0}" == 1 && -f "$out/resume.pt" ]]; then
@@ -63,11 +65,11 @@ srun --cpu-bind=cores python -m rlo.wave2_train \
   --width 128 --layers 2 --device cuda --n-step "$nstep" \
   --epsilon-anneal-fraction 0.2 \
   --batch 32 --replay-batch 64 --lr 0.0003 --seed "$seed" \
-  --replay-capacity-per-size 100000 --updates-per-collection 8 \
+  --replay-capacity-per-size 100000 --updates-per-collection "$updates" \
   --target-sync-updates 1000 --max-real-transitions 50000000 \
   --validate-every-transitions 2500000 \
   --checkpoint-every-transitions 1000000 \
   --milestones 10000000 25000000 40000000 50000000 \
   --validation-count 256 --out "$out" "${resume[@]}"
 
-echo "FINISHED method=$method nstep=$nstep seed=$seed out=$out"
+echo "FINISHED method=$method updates=$updates nstep=$nstep seed=$seed out=$out"
