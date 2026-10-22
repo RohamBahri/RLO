@@ -121,28 +121,59 @@ def simulate(snapshot, action, synthetic=False):
                       moves, synthetic=synthetic)
 
 
-def dyna_from_real(replay, rng, count):
-    """Explore alternative legal actions from *real* previously visited states.
+def dyna_from_real(replay, rng, count, n_step=1, model=None, epsilon=0.1):
+    """Counterfactual root actions sampled only from REAL visited states.
 
-    Excludes the behavior action when possible; does not recursively sample
-    synthetic states. Reports simulator moves separately from fresh experience.
+    With n_step > 1, later simulated actions are current epsilon-greedy
+    policy actions. All physical moves, including forced moves, count against
+    Dyna simulation cost. The n-step target uses uncorrected off-policy returns.
     """
-    transitions = []
-    if count < 0:
-        raise ValueError("count must be nonnegative")
-    for _ in range(count):
-        observed = replay.real_sample(rng)
-        env = observed.before.restore()
-        alternatives = np.flatnonzero(env.legal())
-        alternatives = alternatives[alternatives != observed.action]
-        if len(alternatives) == 0:
-            raise AssertionError("every policy state must have >=2 options")
-        action = int(rng.choice(alternatives))
-        simulated = simulate(observed.before, action, synthetic=True)
-        replay.add(simulated)
-        transitions.append(simulated)
-    return transitions
-
+    if count < 0 or n_step < 1 or (n_step > 1 and model is None):
+        raise ValueError("invalid counterfactual count or n_step")
+    generated = []
+    was_training = model.training if model is not None else False
+    if model is not None:
+        model.eval()
+    try:
+        with torch.no_grad():
+            for _ in range(count):
+                observed = replay.real_sample(rng)
+                env = observed.before.restore()
+                alternatives = np.flatnonzero(env.legal())
+                alternatives = alternatives[alternatives != observed.action]
+                if not len(alternatives):
+                    raise AssertionError("counterfactual must have alternative legal action")
+                first = int(rng.choice(alternatives))
+                action = first
+                reward, moves, steps = 0.0, 0, 0
+                for step_idx in range(n_step):
+                    previous = len(env.tour)
+                    r, done = env.step(action)
+                    reward += float(r)
+                    moves += len(env.tour) - previous
+                    steps += 1
+                    if done:
+                        break
+                    if step_idx + 1 < n_step:
+                        options = np.flatnonzero(env.legal())
+                        if rng.random() < epsilon:
+                            action = int(rng.choice(options))
+                        else:
+                            dev = next(model.parameters()).device
+                            data = [torch.as_tensor(z, device=dev)
+                                    for z in observations([Snapshot.take(env)])]
+                            q, _ = model(*data)
+                            action = int(q.argmax(-1).item())
+                result = Transition(
+                    observed.before, first, reward,
+                    None if env.done else Snapshot.take(env),
+                    moves, synthetic=True, n_steps=steps)
+                replay.add(result)
+                generated.append(result)
+    finally:
+        if model is not None:
+            model.train(was_training)
+    return generated
 
 def collect_real(model, instances, replay, rng, epsilon=0.1, n_step=1):
     """Batched epsilon-greedy self-experience with one static encoding per case."""
