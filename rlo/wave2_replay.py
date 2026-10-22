@@ -8,7 +8,7 @@ physical_moves separately counts all underlying depot/customer moves.
 Dyna uses the known, deterministic CVRP transition law, not an expert tour,
 a fitted dynamics network, or a different reward/environment.
 """
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -67,14 +67,14 @@ class Replay:
         if capacity_per_size < 1:
             raise ValueError("capacity_per_size must be positive")
         self.capacity_per_size = int(capacity_per_size)
-        self.real = defaultdict(lambda: deque(maxlen=self.capacity_per_size))
-        self.synthetic = defaultdict(lambda: deque(maxlen=self.capacity_per_size))
+        self.real = {}
+        self.synthetic = {}
 
     def add(self, transition):
         if transition.physical_moves < 1 or transition.reward > 1e-10:
             raise ValueError("invalid CVRP travel reward or transition length")
         store = self.synthetic if transition.synthetic else self.real
-        store[transition.n].append(transition)
+        store.setdefault(transition.n, deque(maxlen=self.capacity_per_size)).append(transition)
 
     def real_count(self):
         return sum(map(len, self.real.values()))
@@ -94,14 +94,14 @@ class Replay:
         if batch_size < 1:
             raise ValueError("sample batch must be positive")
         sizes = sorted(n for n in set(self.real) | set(self.synthetic)
-                       if self.real[n] or self.synthetic[n])
+                       if self.real.get(n) or self.synthetic.get(n))
         if not sizes:
             raise ValueError("replay is empty")
         n = int(rng.choice(sizes))
         items = []
         for _ in range(batch_size):
-            use_synthetic = bool(self.synthetic[n]) and (
-                not self.real[n] or rng.random() < synthetic_fraction)
+            use_synthetic = bool(self.synthetic.get(n)) and (
+                not self.real.get(n) or rng.random() < synthetic_fraction)
             source = self.synthetic[n] if use_synthetic else self.real[n]
             items.append(source[int(rng.integers(len(source)))])
         return items
