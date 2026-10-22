@@ -14,7 +14,7 @@ from rlo.data import instances
 from rlo.model import Policy
 from rlo.wave2_replay import (Snapshot, Replay, collect_real, simulate,
                               dyna_from_real, observations, double_dqn_targets,
-                              replay_q_update)
+                              replay_q_update, n_step_real_targets)
 
 
 def test_decision_reward_contains_all_forced_moves():
@@ -91,7 +91,7 @@ def run_train(method, dest, *extra):
            "--replay-capacity-per-size", "100",
            "--replay-warmup-decisions", "1", "--updates-per-collection", "2",
            "--target-sync-updates", "3",
-           "--max-sim-transitions", "180",
+           "--max-real-transitions", "180",
            "--validate-every-transitions", "60",
            "--checkpoint-every-transitions", "25",
            "--milestones", "40", "80", "160",
@@ -102,14 +102,15 @@ def run_train(method, dest, *extra):
 
 
 @pytest.mark.parametrize("method", ["ddqn", "dyna"])
-def test_full_train_and_exact_resume_cpu(method, tmp_path):
+@pytest.mark.parametrize("nstep", [1, 3])
+def test_full_train_and_exact_resume_cpu(method, nstep, tmp_path):
     continuous = tmp_path / "continuous"
     split = tmp_path / "split"
-    initial = run_train(method, continuous)
+    initial = run_train(method, continuous, "--n-step", str(nstep))
     assert initial.returncode == 0, initial.stdout + "\n" + initial.stderr
-    interrupted = run_train(method, split, "--stop-after-transitions", "70")
+    interrupted = run_train(method, split, "--n-step", str(nstep), "--stop-after-transitions", "70")
     assert interrupted.returncode == 0, interrupted.stdout + "\n" + interrupted.stderr
-    resumed = run_train(method, split, "--resume", str(split / "resume.pt"))
+    resumed = run_train(method, split, "--n-step", str(nstep), "--resume", str(split / "resume.pt"))
     assert resumed.returncode == 0, resumed.stdout + "\n" + resumed.stderr
     a = torch.load(continuous / "last.pt", map_location="cpu", weights_only=True)
     b = torch.load(split / "last.pt", map_location="cpu", weights_only=True)
@@ -130,7 +131,7 @@ def test_full_train_and_exact_resume_cpu(method, tmp_path):
             assert hist[-1]["dyna_transitions"] > 0
         else:
             assert hist[-1]["dyna_transitions"] == 0
-    assert run_train(method, continuous).returncode != 0
+    assert run_train(method, continuous, "--n-step", str(nstep)).returncode != 0
 
 
 def test_replay_train_rejects_invalid_configuration(tmp_path):
@@ -140,12 +141,64 @@ def test_replay_train_rejects_invalid_configuration(tmp_path):
 
 
 @pytest.mark.parametrize("method", ["ddqn", "dyna"])
-def test_full_wave2_preflight_on_cpu(method):
+@pytest.mark.parametrize("nstep", [1, 3])
+def test_full_wave2_preflight_on_cpu(method, nstep):
     args = [sys.executable, "-m", "rlo.wave2_preflight",
-            "--method", method, "--device", "cpu", "--n", "6",
+            "--method", method, "--n-step", str(nstep), "--device", "cpu", "--n", "6",
             "--batch", "3", "--replay-batch", "4",
             "--width", "16", "--layers", "1"]
     run = subprocess.run(args, capture_output=True, text=True,
                          env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
     assert run.returncode == 0, run.stdout + "\n" + run.stderr
     assert f"WAVE2_PREFLIGHT_OK method={method}" in run.stdout
+
+def test_real_nstep_path_reward_and_no_double_counting():
+    rng = np.random.default_rng(23)
+    model = Policy(width=16, layers=1, logit_clip=None)
+    group = instances(6, "validation", 2)
+    buffer = Replay(100)
+    fresh, envs = collect_real(model, group, buffer, rng, epsilon=.6, n_step=3)
+    assert len(fresh) == buffer.real_count()
+    assert sum(t.physical_moves for t in fresh) == sum(len(e.tour)-1 for e in envs)
+    grouped = {}
+    for t in fresh:
+        grouped.setdefault(id(t.before.instance), []).append(t)
+    recorded = {id(t.before.instance): t for seq in buffer.real.values() for t in seq}
+    assert recorded
+    for episode in grouped.values():
+        stored = [t for t in buffer.real[6] if id(t.before.instance)==id(episode[0].before.instance)]
+        assert len(stored)==len(episode)
+        for i, t in enumerate(stored):
+            seq = episode[i:i+3]
+            assert t.n_steps==len(seq)
+            assert t.reward==pytest.approx(sum(x.reward for x in seq))
+            assert t.after is seq[-1].after
+            assert t.physical_moves == seq[0].physical_moves
+
+def test_optimised_replay_observation_matches_environment_exactly():
+    env = CVRPEnv(instances(8, "validation", 1)[0])
+    for _ in range(4):
+        snap = Snapshot.take(env)
+        from_env = env.observe()
+        from_replay = observations([snap])
+        for x, y in zip(from_env, from_replay):
+            np.testing.assert_array_equal(x, y[0])
+        act = int(np.flatnonzero(env.legal())[0])
+        env.step(act)
+        if env.done: break
+
+def test_matched_epsilon_and_replay_allocation():
+    from rlo.wave2_train import epsilon_at, allocated_updates
+    for method in ("ddqn", "dyna"):
+        assert epsilon_at(0, 50_000_000)==pytest.approx(1)
+        assert epsilon_at(5_000_000, 50_000_000)==pytest.approx(.55)
+        assert epsilon_at(10_000_000, 50_000_000)==pytest.approx(.1)
+        assert epsilon_at(25_000_000, 50_000_000)==pytest.approx(.1)
+    baseline, rest = allocated_updates(8, 500, 0)
+    model_based, extra = allocated_updates(8, 500, 500)
+    assert baseline==8 and model_based==16 and rest==extra==0
+    assert baseline*64/500 == model_based*64/1000
+    # Nonintegral Dyna ratios carry forward without dropping samples.
+    a, remainder = allocated_updates(8, 500, 73)
+    b, remainder = allocated_updates(8, 500, 73, remainder)
+    assert (a+b)==int(2*8*573/500)
