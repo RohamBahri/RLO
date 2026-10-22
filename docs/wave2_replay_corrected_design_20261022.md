@@ -11,17 +11,19 @@ Each fresh training run uses n=10,20,30, seed 0/1/2; width-128, 2-layer distance
 | Arm | n-step | Fresh moves | Additional model moves | Replay updates |
 |---|---:|---:|---|---|
 | DDQN | 1 | 50M | 0 | 8 per fresh collection |
+| DDQN (matched updates) | 1 | 50M | 0 | 16 per collection, no synthetic data |
 | Dyna (known dynamics) | 1 | 50M | Recorded separately | scaled by new real+synthetic tuples |
 | DDQN | 3 | 50M | 0 | 8 per fresh collection |
+| DDQN (matched updates) | 3 | 50M | 0 | 16 per collection, no synthetic data |
 | Dyna (known dynamics) | 3 | 50M | Recorded separately | scaled by new real+synthetic tuples |
 
-All four arms have three seeds: 12 substantive runs. For n=3, a transition's return accumulates up to three decision steps (including forced physical moves), truncates at terminal, and bootstraps from the final state. Real episodes construct these targets without counting overlapping rewards as additional fresh moves; Dyna uses its simulator for the additional steps and charges **all** physical moves generated. The uncorrected off-policy n-step target is a predeclared implementation choice: unlike 1-step DDQN, it is not in general an unbiased multi-step optimal Bellman target. Report that caveat when interpreting n-step results.
+All six arms have three seeds: 18 substantive runs. Matched-update DDQN isolates the effect of model-generated counterfactuals from simply training more gradient updates. For n=3, a transition's return accumulates up to three decision steps (including forced physical moves), truncates at terminal, and bootstraps from the final state. Real episodes construct these targets without counting overlapping rewards as additional fresh moves; Dyna uses its simulator for the additional steps and charges **all** physical moves generated. The uncorrected off-policy n-step target is a predeclared implementation choice: unlike 1-step DDQN, it is not in general an unbiased multi-step optimal Bellman target. Report that caveat when interpreting n-step results.
 
 ## Controlled parameters
 - Common epsilon schedule on **fresh moves**: 1.0→0.1 over the first 20% (10M) of the 50M fresh-move budget, then 0.1.
 - Replay capacity: 100,000 tuples **per size per real/synthetic class** (not 4,000).
 - Two independent random streams for behavior/exploration and Dyna simulation, so counterfactual sampling cannot alter the real-action RNG stream.
-- For each collection, DDQN performs 8 updates; Dyna's updates scale by `(new real tuples + new simulated tuples) / new real tuples`, carrying a fractional remainder. At one simulated root per real decision this gives approximately 16. With replay batch 64, expected sample reuse per newly *stored tuple* is matched, but Dyna is deliberately afforded more optimizer computation; show both quality-vs-fresh-moves and quality-vs-GPU-time plots.
+- For each collection, DDQN performs 8 updates; Dyna's updates scale by `(new real tuples + new simulated tuples) / new real tuples`, carrying a fractional remainder. At one simulated root per real decision this gives approximately 16. DDQN with 16 updates but no simulator is an additional essential control: DDQN-8 vs DDQN-16 measures extra SGD, while DDQN-16 vs Dyna-16 measures incremental counterfactual experience. With replay batch 64, expected sample reuse per newly *stored tuple* is matched for DDQN-8 vs Dyna-16. Show quality-vs-fresh-moves, total-model-simulations and GPU-time.
 - Use a target network, same Huber regression, same n-step choice and same model architecture within each matched pair. The simulator is **known dynamics**, not a learned model. No validation performance selection before training completion.
 - Validation, milestones and final checkpoint at fresh-move 10/25/40/50M; report Dyna additional simulations, replay samples, optimizer updates, epsilon, per-size scores and elapsed time.
 - Final sealed test stays untouched. Full-budget runs are not contingent on short-run validation performance.
