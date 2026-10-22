@@ -289,7 +289,6 @@ def main():
                 checkpoint(moves)
             if stop or interrupted:
                 print("STOP method={} fresh_moves={} sim_moves={} updates={}".format(args.method, moves, sim_count(), counters["optimizer_updates"]), flush=True)
-                      flush=True)
                 break
 
 
