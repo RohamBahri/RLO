@@ -137,3 +137,15 @@ def test_replay_train_rejects_invalid_configuration(tmp_path):
     run = run_train("ddqn", tmp_path / "invalid", "--dyna-per-real-decision", "1")
     assert run.returncode != 0
     assert "DDQN control cannot use Dyna" in run.stderr
+
+
+@pytest.mark.parametrize("method", ["ddqn", "dyna"])
+def test_full_wave2_preflight_on_cpu(method):
+    args = [sys.executable, "-m", "rlo.wave2_preflight",
+            "--method", method, "--device", "cpu", "--n", "6",
+            "--batch", "3", "--replay-batch", "4",
+            "--width", "16", "--layers", "1"]
+    run = subprocess.run(args, capture_output=True, text=True,
+                         env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
+    assert run.returncode == 0, run.stdout + "\n" + run.stderr
+    assert f"WAVE2_PREFLIGHT_OK method={method}" in run.stdout
