@@ -9,6 +9,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -e '.[test]' && pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m compileall -q rlo scripts
       - run: bash -n scripts/campaign/onpolicy50_v2.sbatch
       - run: bash -n scripts/campaign/wave2_replay50.sbatch
       - run: OMP_NUM_THREADS=1 pytest -q
