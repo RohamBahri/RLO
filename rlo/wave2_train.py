@@ -181,7 +181,7 @@ def main():
         return counters["real_moves"] + counters["dyna_moves"]
 
     if counters["real_moves"] >= args.max_real_transitions:
-        print(f"Already complete: {counters[\x27real_moves\x27]:,} fresh physical moves")
+        print(f"Already complete: {counters[\'real_moves\']:,} fresh physical moves")
         return
 
     begin = time.perf_counter()
