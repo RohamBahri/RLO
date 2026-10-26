@@ -118,8 +118,8 @@ def parse_args(argv=None):
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--anneal-to", type=float, default=None)
-    p.add_argument("--lam", type=float, default=.95)
-    p.add_argument("--entropy", type=float, default=.01)
+    p.add_argument("--lam", type=float, default=.9)
+    p.add_argument("--entropy", type=float, default=0.)
     p.add_argument("--ppo-epochs", type=int, default=4)
     p.add_argument("--ppo-minibatch", type=int, default=64)
     p.add_argument("--ppo-clip", type=float, default=.2)
@@ -171,7 +171,7 @@ def main(argv=None):
     random.seed(a.seed)
     np.random.seed(a.seed)
     torch.manual_seed(a.seed)
-    rng = np.random.default_rng(a.seed + 7919)
+    rng = np.random.default_rng(a.seed)
     stream = StatefulTrainingBatches(a.seed, batch=a.batch, sizes=a.sizes,
                                       capacity_factors=a.capacity_factors,
                                       demand_maxes=a.demand_maxes)
