@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=rlo-wave3-ab
+#SBATCH --job-name=rlo-fir-ab
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gpus-per-node=h100:1
 #SBATCH --time=24:00:00
 #SBATCH --signal=USR1@180
 #SBATCH --array=0-53%2
@@ -14,7 +14,9 @@ cd "$HOME/RLO_wave3_ab"
 [[ "$(git rev-parse HEAD)" == "$RLO_AB_SHA" ]] || { echo "WRONG_SHA"; exit 2; }
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || { echo "DIRTY_SOURCE"; exit 2; }
 module load python/3.11
+[[ -f "$HOME/venvs/rlo/bin/activate" ]] || { echo "MISSING_FIR_VENV"; exit 2; }
 source "$HOME/venvs/rlo/bin/activate"
+python -c 'import torch, numpy; print("TORCH", torch.__version__, "CUDA", torch.version.cuda)'
 export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
 export OPENBLAS_NUM_THREADS=1
