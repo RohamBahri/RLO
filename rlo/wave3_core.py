@@ -69,16 +69,17 @@ def trajectories(model, envs, *, grad=False, temperature=1., greedy=False,
             logp = distribution.log_prob(actions)
             entropy = distribution.entropy()
             aux = model.predict_aux(static, nodes, glob) if (record and model.auxiliary_enabled) else None
+            action_ids = actions.detach().cpu().tolist()  # one device transfer, not one sync/action
             for j, idx in enumerate(active):
                 e = envs[idx]
                 snap = Snapshot.take(e) if record else None
                 before_len = len(e.tour)
                 before_position = int(e.current)
-                reward, _ = e.step(int(actions[j].item()))
+                reward, _ = e.step(int(action_ids[j]))
                 extension = tuple(int(x) for x in e.tour[before_len:])
                 if record:
                     traces[idx].append(dict(
-                        before=snap, action=int(actions[j].item()), reward=float(reward),
+                        before=snap, action=int(action_ids[j]), reward=float(reward),
                         logp=logp[j], value=values[j], entropy=entropy[j],
                         aux=None if aux is None else aux[j],
                         path=extension, first_position=before_position))
