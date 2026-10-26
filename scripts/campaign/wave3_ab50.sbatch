@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=24:00:00
 #SBATCH --signal=USR1@180
-#SBATCH --array=0-50%2
+#SBATCH --array=0-53%2
 #SBATCH --output=logs/%x_%A_%a.out
 set -Eeuo pipefail
 : "${RLO_AB_SHA:?Supply the pinned tested Wave3 SHA}"
@@ -28,23 +28,24 @@ batch=16
 extras=()
 tag=
 case "$arm" in
-  0) method=ppo; tag=ppo_gae ;;
+  0) method=ppo; tag=ppo_gae; extras=(--lam 0.95 --entropy 0.01) ;;
   1) method=dyna_critic; tag=dyna_value_mc ;;
   2) method=dyna_actor; tag=dyna_actor_mc ;;
-  3) tag=encoder_raw; extras=(--encoder raw) ;;
-  4) tag=encoder_mlp; extras=(--encoder mlp) ;;
-  5) tag=encoder_codebook; extras=(--encoder codebook) ;;
-  6) tag=attention_256x4_h8; extras=(--width 256 --layers 4 --heads 8) ;;
-  7) tag=glimpse; extras=(--glimpse) ;;
-  8) tag=dynamic_reencode; extras=(--dynamic-reencode) ;;
-  9) tag=no_distance_bias; extras=(--no-distance-bias) ;;
-  10) tag=multi_value_gvf; extras=(--auxiliary --aux-weight 0.1) ;;
-  11) tag=hierarchy; extras=(--hierarchy) ;;
-  12) tag=train_n20; extras=(--sizes 20) ;;
-  13) tag=capacity_fixed; extras=(--capacity-factors 1.0 1.0) ;;
-  14) tag=temperature_anneal; extras=(--temperature 1.0 --anneal-to 0.5) ;;
-  15) tag=pomo_batch4; batch=4 ;;
-  16) tag=pomo_batch8; batch=8 ;;
+  3) method=a2c; tag=a2c_matched_control ;;
+  4) tag=encoder_raw; extras=(--encoder raw) ;;
+  5) tag=encoder_mlp; extras=(--encoder mlp) ;;
+  6) tag=encoder_codebook; extras=(--encoder codebook) ;;
+  7) tag=attention_256x4_h8; extras=(--width 256 --layers 4 --heads 8) ;;
+  8) tag=glimpse; extras=(--glimpse) ;;
+  9) tag=dynamic_reencode; extras=(--dynamic-reencode) ;;
+  10) tag=no_distance_bias; extras=(--no-distance-bias) ;;
+  11) tag=multi_value_gvf; extras=(--auxiliary --aux-weight 0.1) ;;
+  12) tag=hierarchy; extras=(--hierarchy) ;;
+  13) tag=train_n20; extras=(--sizes 20) ;;
+  14) tag=capacity_fixed; extras=(--capacity-factors 1.0 1.0) ;;
+  15) tag=temperature_anneal; extras=(--temperature 1.0 --anneal-to 0.5) ;;
+  16) tag=pomo_batch4; batch=4 ;;
+  17) tag=pomo_batch8; batch=8 ;;
   *) echo "Invalid arm $arm"; exit 2 ;;
 esac
 
