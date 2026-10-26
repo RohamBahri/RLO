@@ -36,6 +36,8 @@ def trajectories(model, envs, *, grad=False, temperature=1., greedy=False,
         raise ValueError("nonempty homogeneous environments and positive temperature required")
     dev = next(model.parameters()).device
     initial = [len(e.tour) for e in envs]
+    complete_prefix = [sum(x != 0 for x in e.tour[1:]) == int(e.visited[1:].sum())
+                       and e.tour[0] == 0 for e in envs]
     traces = [[] for _ in envs]
     # Static encodings are shared by all states drawn from the same instance,
     # including the n forced-start POMO copies.
@@ -80,13 +82,17 @@ def trajectories(model, envs, *, grad=False, temperature=1., greedy=False,
                         logp=logp[j], value=values[j], entropy=entropy[j],
                         aux=None if aux is None else aux[j],
                         path=extension, first_position=before_position))
-        for e in envs:
+        for i, e in enumerate(envs):
             if not e.done or e.infeasible:
                 raise AssertionError("uncompleted/infeasible policy rollout")
-            # Complete ordinary episodes (including POMO forced starts) must
-            # agree with independent tour-cost verification.
-            if e.tour[0] == 0:
+            if complete_prefix[i]:
+                # Full depot-to-depot paths, including POMO's forced starts.
                 e.finish()
+            else:
+                # Restored Dyna/MBPI roots have a suffix, not a complete tour.
+                travel = sum(float(e.dist[a, b]) for a, b in zip(e.tour, e.tour[1:]))
+                if abs(travel - e.cost) > 1e-8:
+                    raise AssertionError("restored suffix cost mismatch")
     moves = sum(len(e.tour) - initial[i] for i, e in enumerate(envs))
     return traces, envs, moves
 
