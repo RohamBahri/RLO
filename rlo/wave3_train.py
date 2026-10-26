@@ -298,7 +298,7 @@ def main(argv=None):
             counters["episodes"] += len(final)
             if a.method == "ppo":
                 result = ppo_update(model, opt, traced, epochs=a.ppo_epochs,
-                                    minibatch=a.ppo_minibatch, clip=a.ppo_clip,
+                                    minibatch=a.ppo_minibatch, clip=a.ppo_clip, temperature=temp,
                                     lam=a.lam, entropy_weight=a.entropy,
                                     aux_weight=a.aux_weight if a.auxiliary else 0.)
                 record.update(result)
