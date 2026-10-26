@@ -163,3 +163,30 @@ def test_mbpi_from_frozen_anchor(tmp_path):
     assert rows[-1]["real_transitions"] > 0
     assert rows[-1]["transitions_total"] >= 140
     assert rows[-1]["mbpi_rollouts"] > 0
+
+
+def test_pomo_matches_original_wave1_update():
+    """Representation ablations must keep the actual Wave-1 POMO objective."""
+    from rlo.model import Policy
+    from rlo.learning import update as old_update
+    torch.manual_seed(2026)
+    old = Policy(width=16, layers=1, glimpse=False)
+    new = ResearchPolicy(width=16, layers=1, glimpse=False)
+    new.load_state_dict(old.state_dict(), strict=True)
+    cases = instances(6, "train", 3)
+    a = torch.optim.Adam(old.parameters(), lr=3e-4)
+    b = torch.optim.Adam(new.parameters(), lr=3e-4)
+    rng_old = np.random.default_rng(17)
+    rng_new = np.random.default_rng(17)
+    torch.manual_seed(200)
+    original = old_update(old, a, cases, "pomo", starts=6, rng=rng_old)
+    torch.manual_seed(200)
+    seq, envs, moves = trajectories(new, environments(cases, 6, rng_new), grad=True)
+    cost, _ = policy_objective(new, seq, envs, "pomo", starts=6, entropy_weight=0.)
+    b.zero_grad()
+    cost.backward()
+    b.step()
+    assert abs(float(cost.detach()) - original["loss"]) < 1e-5
+    assert moves + len(cases) * 6 == original["transitions"]
+    for key, tensor in old.state_dict().items():
+        torch.testing.assert_close(tensor, new.state_dict()[key], atol=1e-5, rtol=1e-5)
