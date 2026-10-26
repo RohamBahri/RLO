@@ -181,12 +181,14 @@ def test_pomo_matches_original_wave1_update():
     torch.manual_seed(200)
     original = old_update(old, a, cases, "pomo", starts=6, rng=rng_old)
     torch.manual_seed(200)
-    seq, envs, moves = trajectories(new, environments(cases, 6, rng_new), grad=True)
+    starting = environments(cases, 6, rng_new)
+    forced_prefix = sum(len(e.tour) - 1 for e in starting)
+    seq, envs, moves = trajectories(new, starting, grad=True)
     cost, _ = policy_objective(new, seq, envs, "pomo", starts=6, entropy_weight=0.)
     b.zero_grad()
     cost.backward()
     b.step()
     assert abs(float(cost.detach()) - original["loss"]) < 1e-5
-    assert moves + len(cases) * 6 == original["transitions"]
+    assert moves + forced_prefix == original["transitions"]
     for key, tensor in old.state_dict().items():
         torch.testing.assert_close(tensor, new.state_dict()[key], atol=1e-5, rtol=1e-5)
