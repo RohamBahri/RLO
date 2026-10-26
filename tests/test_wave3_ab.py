@@ -150,25 +150,45 @@ def test_resume_exact_policy_and_counters(method, options, tmp_path):
         torch.testing.assert_close(a[name], b[name], atol=0, rtol=0)
 
 
-def test_mbpi_from_frozen_anchor(tmp_path):
-    # Produce a tiny genuine v2 campaign anchor with the original code.
+@pytest.mark.parametrize("roots,rollouts", [(4, 8), (16, 4)])
+def test_mbpi_from_seed_matched_pomo_anchor(roots, rollouts, tmp_path):
+    # Produce a real original-format POMO anchor; synthetic MBPI states
+    # must not be trained using an A2C checkpoint mislabeled as POMO.
     anchor = tmp_path / "anchor"
-    command = [sys.executable, "-m", "rlo.campaign_train", "--method", "a2c",
-               "--sizes", "4", "--updates", "1", "--batch", "2",
+    command = [sys.executable, "-m", "rlo.campaign_train", "--method", "pomo",
+               "--sizes", "4", "--updates", "1", "--batch", "2", "--seed", "7",
                "--width", "16", "--layers", "1", "--validation-count", "2",
                "--device", "cpu", "--out", str(anchor)]
     r = subprocess.run(command, capture_output=True, text=True, timeout=90,
                        env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
     assert r.returncode == 0, r.stdout + r.stderr
     output = tmp_path / "mbpi"
-    args = _args("mbpi", output, "--initial-checkpoint", str(anchor / "last.pt"))
+    args = _args("mbpi", output, "--initial-checkpoint", str(anchor / "last.pt"),
+                 "--mbpi-roots", str(roots), "--mbpi-rollouts", str(rollouts))
     r = _run(args)
     assert r.returncode == 0, r.stdout + r.stderr
     rows = [json.loads(s) for s in (output / "history.jsonl").read_text().splitlines()]
     assert rows[-1]["synthetic_transitions"] > 0
     assert rows[-1]["real_transitions"] > 0
     assert rows[-1]["transitions_total"] >= 140
-    assert rows[-1]["mbpi_rollouts"] > 0
+    assert rows[-1]["mbpi_rollouts"] == rows[-1]["mbpi_actions"] * rollouts
+    assert rows[-1]["mbpi_roots"] == roots
+    assert rows[-1]["mbpi_unique_roots"] == min(roots, rows[-1]["mbpi_root_candidates"])
+    assert rows[-1]["mbpi_root_candidates"] >= 2
+
+    # Wrong seed and wrong requested milestone must be rejected BEFORE training.
+    wrong_seed = _run(_args("mbpi", tmp_path / "wrong_seed",
+                           "--initial-checkpoint", str(anchor / "last.pt"),
+                           "--seed", "8"))
+    assert wrong_seed.returncode != 0
+    assert "seed-matched" in wrong_seed.stderr
+
+    wrong_milestone = _run(_args(
+        "mbpi", tmp_path / "wrong_milestone",
+        "--initial-checkpoint", str(anchor / "last.pt"),
+        "--expected-initial-moves", "25000000"))
+    assert wrong_milestone.returncode != 0
+    assert "milestone" in wrong_milestone.stderr
 
 
 def test_pomo_matches_original_wave1_update():
