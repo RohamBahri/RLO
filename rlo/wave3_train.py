@@ -44,14 +44,19 @@ def mbpi_step(model, optimizer, traces, rng, *, roots_per_collection=4,
     candidates = [s["before"] for seq in traces for s in seq]
     if not candidates:
         raise ValueError("no real decision roots for MBPI")
-    roots = [candidates[int(rng.integers(len(candidates)))]
-             for _ in range(roots_per_collection)]
+    # Allocate improvement to distinct *visited states* whenever possible.
+    # Sampling with replacement unnecessarily duplicates policy targets
+    # within the same update, particularly for the 16-root experiment.
+    root_indices = rng.choice(len(candidates), size=roots_per_collection,
+                              replace=(len(candidates) < roots_per_collection))
+    roots = [candidates[int(i)] for i in root_indices]
     dev = next(model.parameters()).device
     q_rows = []
-    synthetic_moves, rollouts = 0, 0
+    synthetic_moves, rollouts, action_count = 0, 0, 0
     for root in roots:
         legal = np.flatnonzero(root.restore().legal())
         q = np.full(len(root.visited), np.inf, dtype=np.float64)
+        action_count += len(legal)
         scores = {int(action): [] for action in legal}
         # Batch independent action branches of the same root. This amortizes
         # graph encoding over up to 96 rollouts rather than encoding once for
@@ -97,7 +102,9 @@ def mbpi_step(model, optimizer, traces, rng, *, roots_per_collection=4,
         optimizer.step()
         losses.append(float(loss.detach()))
     return dict(loss=float(np.mean(losses)), optimizer_updates=projection_epochs,
-                mbpi_roots=len(roots), mbpi_rollouts=rollouts,
+                mbpi_roots=len(roots), mbpi_root_candidates=len(candidates),
+                mbpi_unique_roots=len(set(int(i) for i in root_indices)),
+                mbpi_actions=action_count, mbpi_rollouts=rollouts,
                 synthetic_moves=synthetic_moves)
 
 
@@ -138,6 +145,8 @@ def parse_args(argv=None):
     p.add_argument("--mbpi-eta", type=float, default=.2)
     p.add_argument("--mbpi-epochs", type=int, default=1)
     p.add_argument("--initial-checkpoint", default=None)
+    p.add_argument("--expected-initial-moves", type=int, default=0,
+                   help="Verify that the frozen POMO anchor reached the intended 25M milestone")
     p.add_argument("--max-moves", type=int, default=50_000_000,
                    help="fresh CVRP physical moves, except MBPI: fresh+simulated budget")
     p.add_argument("--validate-every-moves", type=int, default=2_500_000)
@@ -158,7 +167,8 @@ def parse_args(argv=None):
         a.validation_count < 2 or a.temperature <= 0 or a.lam < 0 or a.lam > 1 or
         a.ppo_epochs < 1 or a.ppo_minibatch < 1 or a.ppo_clip <= 0 or
         a.dyna_roots < 1 or a.mbpi_roots < 1 or a.mbpi_rollouts < 1 or
-        a.mbpi_eta <= 0 or a.mbpi_epochs < 1 or (a.auxiliary and a.aux_weight <= 0)):
+        a.mbpi_eta <= 0 or a.mbpi_epochs < 1 or a.expected_initial_moves < 0 or
+        (a.auxiliary and a.aux_weight <= 0)):
         p.error("invalid nonpositive budget, feature, exploration, or network parameters")
     if a.anneal_to is not None and a.anneal_to <= 0:
         p.error("--anneal-to must be positive")
@@ -247,6 +257,19 @@ def main(argv=None):
                 initial["architecture"] != dict(width=a.width, layers=a.layers,
                     distance_bias=not a.no_distance_bias, logit_clip=10., glimpse=a.glimpse)):
                 raise ValueError("MBPI source checkpoint architecture mismatch")
+            if a.method == "mbpi":
+                provenance = initial.get("campaign_config", {})
+                if (initial.get("campaign_version") != 1 or
+                    provenance.get("method") != "pomo" or
+                    provenance.get("seed") != a.seed):
+                    raise ValueError("MBPI requires seed-matched Wave-1 POMO anchor")
+                if a.expected_initial_moves:
+                    initial_moves = int(initial.get("transitions_total", -1))
+                    # Saved milestones are recorded on batch boundaries and
+                    # therefore can cross the threshold by a few transitions.
+                    if not (a.expected_initial_moves <= initial_moves <
+                            a.expected_initial_moves + 100_000):
+                        raise ValueError("MBPI source is not the requested POMO milestone")
             model.load_state_dict(initial["model"], strict=True)
         (directory / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     if a.method == "mbpi" and (a.auxiliary or a.hierarchy or a.dynamic_reencode
