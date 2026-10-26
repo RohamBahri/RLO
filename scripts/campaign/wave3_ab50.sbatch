@@ -69,7 +69,7 @@ if [[ ${#resume[@]} -eq 0 ]]; then
   smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/rlo_ab_preflight.XXXXXXXX")"
   trap 'rm -rf "$smoke_dir"' EXIT
   srun --cpu-bind=cores python -m rlo.wave3_train \
-    --method "$method" --sizes 30 --batch "$batch" --seed "$seed" \
+    --method "$method" --sizes 30 --eval-sizes 30 --batch "$batch" --seed "$seed" \
     --device cuda --max-moves 50000000 --stop-after-moves 1 \
     --validation-count 2 --checkpoint-every-moves 1 \
     --validate-every-moves 50000000 --milestones \
