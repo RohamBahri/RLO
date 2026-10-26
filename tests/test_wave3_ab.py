@@ -92,7 +92,7 @@ def _run(args):
 
 
 def _args(method, path, *extra):
-    return ["--method", method, "--sizes", "4", "6", "--width", "16",
+    return ["--method", method, "--sizes", "4", "6", "--eval-sizes", "4", "6", "--width", "16",
             "--layers", "1", "--batch", "2", "--device", "cpu",
             "--max-moves", "140", "--validation-count", "2",
             "--validate-every-moves", "90", "--checkpoint-every-moves", "20",
