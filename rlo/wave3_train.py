@@ -47,8 +47,15 @@ def mbpi_step(model, optimizer, traces, rng, *, roots_per_collection=4,
     # Allocate improvement to distinct *visited states* whenever possible.
     # Sampling with replacement unnecessarily duplicates policy targets
     # within the same update, particularly for the 16-root experiment.
-    root_indices = rng.choice(len(candidates), size=roots_per_collection,
-                              replace=(len(candidates) < roots_per_collection))
+    if len(candidates) >= roots_per_collection:
+        root_indices = rng.choice(len(candidates), size=roots_per_collection,
+                                  replace=False)
+    else:
+        # Visit every available root once before drawing any repeats.
+        root_indices = np.concatenate([
+            rng.permutation(len(candidates)),
+            rng.choice(len(candidates),
+                       size=roots_per_collection - len(candidates), replace=True)])
     roots = [candidates[int(i)] for i in root_indices]
     dev = next(model.parameters()).device
     q_rows = []
