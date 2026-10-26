@@ -57,9 +57,15 @@ def test_mcts_batched_and_reused_tree():
     class Mock(torch.nn.Module):
         def __init__(self):
             super().__init__();self.anchor=torch.nn.Parameter(torch.tensor(0.))
-        def forward(self,node,glob,dist,mask):
+            self.encode_calls=0
+        def encode(self,node,dist):
+            self.encode_calls+=1
+            return node
+        def decode(self,static,node,glob,mask):
             logits=torch.zeros(mask.shape,device=node.device)
             return logits.masked_fill(~mask,-1e9),node.new_zeros((len(node),))
+        def forward(self,node,glob,dist,mask):
+            return self.decode(self.encode(node,dist),node,glob,mask)
     rng=np.random.default_rng(7);policy=Mock()
     tree=Tree(env,rng)
     target,stats=search_many(policy,[tree],simulations=20)
@@ -70,6 +76,9 @@ def test_mcts_batched_and_reused_tree():
         target2,stats2=search_many(policy,[tree],simulations=20)
         assert abs(target2[0].sum()-1)<1.e-12
         assert np.all(target2[0][~env.legal()]==0)
+    # All tree nodes share unchanged instance-static features. Encoder caching
+    # is valid only until the policy is updated, at which point trees are freed.
+    assert policy.encode_calls==1
 
 
 def test_exact_residual_cvrp_state_and_prefix():

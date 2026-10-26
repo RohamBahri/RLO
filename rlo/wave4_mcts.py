@@ -39,14 +39,34 @@ class Node:
     n: int = 0
 
 
-def _model_batch(model, snapshots):
-    """Return masked legal priors and scalar *reward* value for each snapshot."""
+def _model_batch(model, snapshots, cache=None):
+    """Batched masked priors and remaining-reward values, with static caching.
+
+    The cache is valid only while the network weights are frozen. Training
+    drivers discard it before every optimizer update; a different policy must
+    never reuse these tensors.
+    """
     device = next(model.parameters()).device
     obs = [s.restore().observe() for s in snapshots]
-    tensors = [torch.as_tensor(np.stack([o[j] for o in obs]), device=device)
-               for j in range(4)]
+    nodes, glob, dist, mask = [torch.as_tensor(np.stack([o[j] for o in obs]), device=device)
+                               for j in range(4)]
     with torch.no_grad():
-        logits, val = model(*tensors)
+        if cache is None:
+            logits, val = model(nodes, glob, dist, mask)
+        else:
+            indices = [i for i,s in enumerate(snapshots) if id(s.instance) not in cache]
+            # Deduplicate repeated snapshots of the same instance within this batch.
+            missing = []
+            seen = set()
+            for i in indices:
+                key = id(snapshots[i].instance)
+                if key not in seen:missing.append(i);seen.add(key)
+            if missing:
+                encoded = model.encode(nodes[missing], dist[missing])
+                for j, i in enumerate(missing):
+                    cache[id(snapshots[i].instance)] = encoded[j].detach()
+            static = torch.stack([cache[id(s.instance)] for s in snapshots])
+            logits, val = model.decode(static, nodes, glob, mask)
         probs = logits.softmax(-1).cpu().numpy()
         values = val.cpu().numpy()
     return probs, values
@@ -83,12 +103,12 @@ def _expand_child(node, action, stats):
     return child, float(reward)
 
 
-def _rollout(model, snap, rng, stats):
+def _rollout(model, snap, rng, stats, cache):
     """One exact-simulator completion sampled under the current *frozen* actor."""
     env = snap.restore()
     total = 0.
     while not env.done:
-        probs, _ = _model_batch(model, [Snapshot.take(env)])
+        probs, _ = _model_batch(model, [Snapshot.take(env)], cache)
         stats.model_calls += 1
         stats.network_states += 1
         mask = env.legal()
@@ -105,7 +125,7 @@ def _rollout(model, snap, rng, stats):
 
 class Tree:
     def __init__(self, env, rng, *, c_puct=1.25, root_noise=False,
-                 noise_alpha=.3, noise_weight=.25):
+                 noise_alpha=.3, noise_weight=.25, encoder_cache=None):
         self.root = Node(snap=Snapshot.take(env))
         self.rng = rng
         self.c_puct = float(c_puct)
@@ -113,6 +133,7 @@ class Tree:
         self.alpha = float(noise_alpha)
         self.weight = float(noise_weight)
         self.stats = SearchStats()
+        self.encoder_cache = encoder_cache if encoder_cache is not None else {}
 
     def advance(self, action, env):
         """Reuse subtree for the chosen real action without treating it as simulation."""
@@ -133,7 +154,7 @@ def _expand_batch(model, work, *, leaf_type, stats):
     if not work:
         return
     snaps = [node.snap for _, node, _ in work]
-    probs, values = _model_batch(model, snaps)
+    probs, values = _model_batch(model, snaps, work[0][0].encoder_cache)
     stats.model_calls += 1
     stats.network_states += len(snaps)
     for (tree, node, path), row, v in zip(work, probs, values):
@@ -155,7 +176,7 @@ def _expand_batch(model, work, *, leaf_type, stats):
         if leaf_type == "value":
             leaf = float(v)
         elif leaf_type == "rollout":
-            leaf = _rollout(model, node.snap, tree.rng, stats)
+            leaf = _rollout(model, node.snap, tree.rng, stats, tree.encoder_cache)
         else:
             raise ValueError("leaf_type must be 'value' or 'rollout'")
         _backup(path, leaf)

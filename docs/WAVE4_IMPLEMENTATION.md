@@ -78,3 +78,23 @@ faithful original GVF-CAPI definition/source recovery; canonical stochastic
 beam (we provide a named `perturbed_beam` heuristic instead); the full
 projection/continuation-bias decomposition for MBPI; and matched-time classical
 reference generation. Those are not silently counted as complete.
+
+## Preregistered result aggregation
+
+The `rlo.wave4_report` command reads immutable validation histories from all
+33 complete training jobs. It refuses missing seeds, incomplete runs or fewer
+than four validation evaluations per run. The primary per-seed score is the
+**average of the final four** normalized greedy scores on n10/20/30 (equal
+weight to each size), with a mean and sample standard deviation over the three
+seeds. It also reports the final point, fresh and simulated moves, optimizer
+updates, and elapsed GPU-job seconds; it never searches for the best checkpoint
+or uses the sealed test split.
+
+```bash
+python -m rlo.wave4_report --root "$SCRATCH/RLO_runs/campaign_wave4" \
+  --out "$SCRATCH/RLO_runs/campaign_wave4_summary"
+```
+
+Completing these training runs is **not** itself evidence of improvement: the
+comparisons to historical controls, per-instance validation, feasibility,
+resource use, and method fidelity require separate analysis.

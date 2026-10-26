@@ -112,7 +112,9 @@ def _searched_episodes(model, envs, rng, *, simulations=32, leaf_type='value',
                        mixture=.05, c_puct=1.25):
     """MCTS behavior on fresh instances, with frozen policy for a whole collection."""
     records = [[] for _ in envs]
-    trees = [None if e.done else Tree(e, rng, c_puct=c_puct, root_noise=True)
+    encoding_cache={}
+    trees = [None if e.done else Tree(e, rng, c_puct=c_puct, root_noise=True,
+                                     encoder_cache=encoding_cache)
              for e in envs]
     physical, stats = 0, SearchStats()
     while True:
@@ -573,7 +575,9 @@ def main(argv=None):
                     take=max(1,round(.25*len(roots)))
                     indices=rng.choice(len(roots),size=take,replace=False)
                     selected=[roots[int(i)] for i in indices]
-                    trees=[Tree(r.restore(),rng,root_noise=True) for r in selected]
+                    encoder_cache={}
+                    trees=[Tree(r.restore(),rng,root_noise=True,encoder_cache=encoder_cache)
+                           for r in selected]
                     target,search=search_many(model,trees,a.simulations)
                     (logits,_),_=policy_tensors(model,selected)
                     qt=torch.tensor(np.stack(target),device=logits.device,dtype=logits.dtype)
