@@ -29,8 +29,8 @@ class ResearchPolicy(Policy):
             raise ValueError("unknown encoder_type")
         if width % heads:
             raise ValueError("width must be divisible by heads")
-        if heads != 4 and glimpse:
-            raise ValueError("glimpse uses the base four-head decoder; disable for eight-head study")
+        if glimpse and (heads != 4 or encoder_type != "attention"):
+            raise ValueError("glimpse requires four-head attention encoder")
         self.encoder_type = encoder_type
         self.heads = heads
         self.dynamic_reencode = bool(dynamic_reencode)
