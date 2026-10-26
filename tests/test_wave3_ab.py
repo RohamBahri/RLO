@@ -239,3 +239,32 @@ def test_shared_validation_grid_and_sealed_test(tmp_path):
                              env=dict(os.environ, OMP_NUM_THREADS="1"))
     assert blocked.returncode != 0
     assert "sealed" in blocked.stderr
+
+
+def test_mbpi_interrupted_resume_matches_uninterrupted(tmp_path):
+    anchor = tmp_path / "pomo_anchor"
+    command = [sys.executable, "-m", "rlo.campaign_train", "--method", "pomo",
+               "--sizes", "4", "--updates", "1", "--batch", "2", "--seed", "7",
+               "--width", "16", "--layers", "1", "--validation-count", "2",
+               "--device", "cpu", "--out", str(anchor)]
+    build = subprocess.run(command, capture_output=True, text=True, timeout=90,
+                           env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
+    assert build.returncode == 0, build.stderr + build.stdout
+
+    full, split = tmp_path / "full", tmp_path / "split"
+    common = ["--initial-checkpoint", str(anchor / "last.pt"),
+              "--max-moves", "2500", "--mbpi-roots", "4",
+              "--mbpi-rollouts", "8"]
+    a = _run(_args("mbpi", full, *common))
+    assert a.returncode == 0, a.stderr + a.stdout
+    b = _run(_args("mbpi", split, *common, "--stop-after-moves", "1"))
+    assert b.returncode == 0, b.stderr + b.stdout
+    c = _run(_args("mbpi", split, *common, "--resume", str(split / "last.pt")))
+    assert c.returncode == 0, c.stderr + c.stdout
+    x = torch.load(full / "policy.pt", weights_only=True)["model"]
+    y = torch.load(split / "policy.pt", weights_only=True)["model"]
+    for key in x:
+        torch.testing.assert_close(x[key], y[key], rtol=0, atol=0)
+    records = [json.loads(line) for line in (split / "history.jsonl").read_text().splitlines()]
+    assert records[-1]["transitions_total"] >= 2500
+    assert records[-1]["mbpi_roots"] == 4
