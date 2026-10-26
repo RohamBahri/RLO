@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from .campaign_train import evaluate_greedy
-from .data import StatefulTrainingBatches
+from .data import StatefulTrainingBatches, evaluation_instances
 from .env import CVRPEnv
 from .wave2_replay import Snapshot, observations
 from .wave3_core import environments, trajectories, policy_objective
@@ -144,7 +144,7 @@ def _searched_episodes(model, envs, rng, *, simulations=32, leaf_type='value',
     return records, physical, stats
 
 
-def _actor_critic_loss(model, episodes, *, is_vtrace=True):
+def _actor_critic_loss(model, episodes, *, entropy_weight=0.):
     if not episodes:
         raise ValueError("empty actor-critic batch")
     stats, per_episode = [], []
@@ -159,7 +159,7 @@ def _actor_critic_loss(model, episodes, *, is_vtrace=True):
         rewards = torch.tensor([s['reward'] for s in episode], device=dev)
         old = torch.tensor([s['behavior_logp'] for s in episode], device=dev)
         loss, components = vtrace_loss(rewards, values, old, target_logp,
-                                       entropy=dist.entropy(), entropy_weight=0.01)
+                                       entropy=dist.entropy(), entropy_weight=entropy_weight)
         per_episode.append(loss)
         stats.append(components)
     return torch.stack(per_episode).mean(), dict(
@@ -204,13 +204,42 @@ def _sample_q(model, root, actions, rng, rollouts):
     return {a:np.asarray(v,dtype=np.float64) for a,v in out.items()},moves,len(envs)
 
 
+def _conditional_kl_target(prior_logp, shortlist, costs, eta):
+    """KL reweight ONLY shortlisted actions; preserve remaining prior mass.
+
+    This is a conditional KL improvement, NOT a hard-pruning operator.
+    All entries of the input prior must be valid log-probabilities; masked
+    actions have negligible mass and are never in the shortlist.
+    """
+    if eta <= 0 or len(shortlist) != len(costs) or not len(shortlist):
+        raise ValueError('invalid conditional-KL inputs')
+    ids = torch.as_tensor(shortlist, dtype=torch.long, device=prior_logp.device)
+    if len(torch.unique(ids)) != len(ids):
+        raise ValueError('duplicate shortlisted actions')
+    values = torch.as_tensor(costs, dtype=prior_logp.dtype,
+                             device=prior_logp.device)
+    prior = prior_logp.detach()
+    target = prior.exp().clone()
+    mass = target[ids].sum()
+    target[ids] = mass * torch.softmax(prior[ids]-(values-values.min())/eta, -1)
+    if not torch.allclose(target.sum(), target.new_tensor(1.), atol=1.e-5):
+        raise AssertionError('conditional-KL target failed normalization')
+    return target
+
+
+def _budget_for(method, counters):
+    """Preregistered primary axis; secondary axes are always logged separately."""
+    return (counters['real_moves']+counters['synthetic_moves']
+            if method in WARM | {'az_scratch'} else counters['real_moves'])
+
+
 def _gvf_update(model, gvf, optimizer, episodes, rng, blend=False, *, rollouts=4, topk=4,
                 eta=.2):
     dev = next(model.parameters()).device
     roots = [s['before'] for ep in episodes for s in ep]
     if not roots:
         raise AssertionError('no GVF roots')
-    roots = [roots[int(i)] for i in rng.choice(len(roots), size=min(4,len(roots)),
+    roots = [roots[int(i)] for i in rng.choice(len(roots), size=min(16,len(roots)),
                                                replace=False)]
     targets, labels, support = [], [], []
     synthetic, samples, all_legal_recall = 0, 0, []
@@ -220,31 +249,31 @@ def _gvf_update(model, gvf, optimizer, episodes, rng, blend=False, *, rollouts=4
         with torch.no_grad():
             estimate = gvf(model, tensors)[0].cpu().numpy()
         k = min(topk, len(legal))
-        selected = sorted(legal, key=lambda a: (estimate[a], a))[:k]
-        # One out-of-shortlist exploration action, if available, for GVF coverage.
+        selected = sorted((int(a) for a in legal), key=lambda a: (estimate[a], a))[:k]
+        # One extra action supplies unbiasedly sampled nonshortlist GVF
+        # regression data, but is NOT included in the KL improvement set.
         omitted = [int(x) for x in legal if x not in selected]
-        if omitted:
-            selected.append(int(rng.choice(omitted)))
-        q, moves, nroll = _sample_q(model, snap, selected, rng, rollouts)
+        explored = selected + ([int(rng.choice(omitted))] if omitted else [])
+        q, moves, nroll = _sample_q(model, snap, explored, rng, rollouts)
         synthetic += moves
         samples += nroll
+        # Conditional KL improvement within the k shortlisted candidates:
+        # keep their TOTAL mass and all nonshortlist probabilities unchanged.
+        # Do not hard-prune unseen alternatives from the learned actor.
+        prior = logits.detach().log_softmax(-1)[0]
         costs = np.array([q[a].mean() for a in selected])
         if blend:
             tails = np.array([np.sort(q[a])[:max(1,int(np.ceil(.1*len(q[a]))))].mean()
                               for a in selected])
-            costs = .5 * costs + .5 * tails
-        # KL projection restricted to sampled candidates, with action-prior support.
-        prior = logits.detach().log_softmax(-1)[0]
-        t = torch.zeros_like(prior)
-        inds = torch.tensor(selected, dtype=torch.long, device=dev)
-        raw = prior[inds] - torch.as_tensor(costs-costs.min(),device=dev,dtype=prior.dtype)/eta
-        t[inds] = raw.softmax(-1)
+            costs = .5*costs + .5*tails
+        t = _conditional_kl_target(prior, selected, costs, eta)
         targets.append(t)
         labs = torch.zeros_like(prior)
-        labs[inds] = torch.as_tensor([q[a].mean() for a in selected],
+        explored_ids = torch.tensor(explored, dtype=torch.long, device=dev)
+        labs[explored_ids] = torch.as_tensor([q[a].mean() for a in explored],
                                     dtype=prior.dtype, device=dev)
         labels.append(labs)
-        support.append([int(x) for x in selected])
+        support.append([int(x) for x in explored])
         all_legal_recall.append(len(selected)/len(legal))
     ((logits, _), tensors) = policy_tensors(model, roots)
     gv = gvf(model, tensors)
@@ -264,7 +293,8 @@ def _gvf_update(model, gvf, optimizer, episodes, rng, blend=False, *, rollouts=4
     optimizer.step()
     return dict(loss=float(obj.detach()), actor=float(actor.detach()),
                 critic=float(aux.detach()), synthetic=synthetic,
-                rollout_samples=samples, candidates=float(np.mean(all_legal_recall)),updates=1)
+                rollout_samples=samples, gvf_roots=len(roots),
+                candidates=float(np.mean(all_legal_recall)),updates=1)
 
 
 def _self_imitation(model, optimizer, cases, rng, *, k=16):
@@ -317,6 +347,56 @@ def _calibration_update(model, opt, episodes):
     return float(loss.detach())
 
 
+def _calibration_validation(model, *, count=16):
+    """Fixed held-out policy returns; used for diagnostics, never targets.
+
+    The return of each sampled policy suffix is an unbiased but noisy draw
+    from the current policy's value. This is NOT an exact V^pi oracle.
+    """
+    was_training = model.training
+    model.eval()
+    rng = np.random.default_rng(946502)
+    predictions, actual, physical = [], [], 0
+    per_size = {}
+    try:
+        with torch.no_grad():
+            for n in (10, 20, 30):
+                cases = evaluation_instances(n, 'validation', count)
+                episode, moves = _batch_policy_episodes(model,
+                                    [CVRPEnv(inst) for inst in cases], rng)
+                physical += moves
+                snaps, labels = [], []
+                for seq in episode:
+                    ret = 0.
+                    local = []
+                    for step in reversed(seq):
+                        ret += step['reward']
+                        local.append(ret)
+                    labels.extend(reversed(local))
+                    snaps.extend(step['before'] for step in seq)
+                (_, estimates), _ = policy_tensors(model, snaps)
+                pred = estimates.detach().cpu().numpy().astype(np.float64)
+                obs = np.asarray(labels, dtype=np.float64)
+                variance = float(np.var(obs))
+                explained = (1.-float(np.var(obs-pred))/variance
+                             if variance > 1.e-12 else None)
+                per_size[str(n)] = dict(n_states=len(obs), mse=float(np.mean((obs-pred)**2)),
+                                        explained_variance=explained)
+                predictions.extend(pred.tolist())
+                actual.extend(obs.tolist())
+    finally:
+        model.train(was_training)
+    pred = np.asarray(predictions)
+    obs = np.asarray(actual)
+    variance = float(np.var(obs))
+    return dict(n_states=len(obs), n_instances=3*count,
+                validation_physical_moves=physical,
+                mse=float(np.mean((obs-pred)**2)),
+                explained_variance=(1.-float(np.var(obs-pred))/variance
+                                   if variance > 1.e-12 else None),
+                by_size=per_size)
+
+
 class EpisodeReplay:
     def __init__(self, limit=100000):
         self.limit = limit
@@ -360,12 +440,14 @@ def parser(argv=None):
     p.add_argument('--simulations',type=int,default=32)
     p.add_argument('--rollouts',type=int,default=4)
     p.add_argument('--k',type=int,default=16)
+    p.add_argument('--entropy',type=float,default=0.,help='V-trace entropy regularization (default matched to no entropy)')
+    p.add_argument('--min-calibration-ev',type=float,default=0.,help='Predeclared explained-variance calibration threshold')
     p.add_argument('--device',choices=('cpu','cuda'),default='cuda')
     p.add_argument('--out',required=True)
     p.add_argument('--resume',action='store_true')
     p.add_argument('--stop-after-moves',type=int)
     a=p.parse_args(argv)
-    if a.batch<1 or a.validate_every<1 or a.checkpoint_every<1 or a.simulations<1 or a.k<2 or a.rollouts<1 or a.validation_count<1:
+    if a.batch<1 or a.validate_every<1 or a.checkpoint_every<1 or a.simulations<1 or a.k<2 or a.rollouts<1 or a.validation_count<1 or a.entropy<0:
         p.error('positive batch, budget, rollout and validation settings required')
     if a.lr is None:a.lr=0.0001 if a.method in WARM or a.method=='calibrate' else .0003
     if a.max_moves is None:a.max_moves=1000000 if a.method=='calibrate' else (25000000 if a.method in WARM else 50000000)
@@ -383,6 +465,11 @@ def _initial_model(a):
             if original.get('method')!='calibrate' or original.get('seed')!=a.seed:
                 raise ValueError('warm source must be same-seed Wave4 calibrated model')
             source=original['model']
+            a.source_calibration_quality=original.get('calibration_quality')
+            if not a.source_calibration_quality:
+                a.source_calibration_warning='unverified calibration (missing diagnostics)'
+            elif not a.source_calibration_quality.get('passed', False):
+                a.source_calibration_warning='value-head calibration failed declared gate'
         else:
             provenance=original.get('campaign_config',{})
             if original.get('campaign_version')!=1 or provenance.get('method')!='pomo' or provenance.get('seed')!=a.seed:
@@ -430,6 +517,7 @@ def main(argv=None):
             for k,v in state.items():
                 if isinstance(v,torch.Tensor):state[k]=v.to(a.device)
         counters=saved['counters'];replay=saved['replay']
+        calibration_quality=saved.get('calibration_quality')
         stream.load_state_dict(saved['stream_rng'])
         rng.bit_generator.state=saved['numpy_rng']
         random.setstate(saved['python_rng'])
@@ -443,6 +531,7 @@ def main(argv=None):
         temp=out/'history.jsonl.tmp';temp.write_text(''.join(json.dumps(r)+'\n' for r in rows))
         os.replace(temp,hist)
     else:
+        calibration_quality=None
         if out.exists() and set(x.name for x in out.iterdir())-{'commit.txt'}:
             raise ValueError('refusing populated output directory')
         out.mkdir(parents=True,exist_ok=True)
@@ -456,9 +545,7 @@ def main(argv=None):
     started=time.perf_counter()
 
     def budget():
-        if a.method in WARM|{'dualstream','az_scratch'}:
-            return counters['real_moves']+counters['synthetic_moves']
-        return counters['real_moves']
+        return _budget_for(a.method, counters)
 
     def checkpoint():
         counters['last_checkpoint']=budget()
@@ -466,7 +553,8 @@ def main(argv=None):
         state=dict(wave4_version=1,method=a.method,seed=a.seed,config=config,
                    model=model.state_dict(),gvf=None if gvf is None else gvf.state_dict(),
                    optimizer=opt.state_dict(),counters=copy.deepcopy({**counters,'elapsed_seconds':elapsed}),
-                   replay=replay,stream_rng=stream.state_dict(),
+                   replay=replay,calibration_quality=calibration_quality,
+                   stream_rng=stream.state_dict(),
                    numpy_rng=copy.deepcopy(rng.bit_generator.state),python_rng=random.getstate(),
                    torch_rng=torch.get_rng_state(),
                    cuda_rng=torch.cuda.get_rng_state_all() if a.device=='cuda' else None)
@@ -514,7 +602,7 @@ def main(argv=None):
                     network_states=search.network_states,model_calls=search.model_calls,
                     search_traversals=search.traversals)
                 for _ in range(4):
-                    if a.method=='vtrace_mcts':obj,details=_actor_critic_loss(model,ep)
+                    if a.method=='vtrace_mcts':obj,details=_actor_critic_loss(model,ep,entropy_weight=a.entropy)
                     else:obj,details=_imitation_loss(model,ep)
                     record['loss']=checked_step(obj)
                     record['optimizer_added']+=1
@@ -527,6 +615,8 @@ def main(argv=None):
                                    rollouts=a.rollouts)
                 record.update(loss=result['loss'],actor=result['actor'],critic=result['critic'],
                               sampled_candidates=result['candidates'],
+                              gvf_roots=result['gvf_roots'],
+                              rollout_samples=result['rollout_samples'],
                               synthetic_added=result['synthetic'])
                 record['simulated_added']=result['synthetic'];record['optimizer_added']=1
             elif a.method=='self_imitation':
@@ -544,7 +634,7 @@ def main(argv=None):
                 source=(replay.sample(rng,n,sample_count) if a.method=='offpolicy'
                         else [ep[int(rng.integers(len(ep)))] for _ in range(sample_count)])
                 for group in (source[i:i+len(ep)] for i in range(0,len(source),len(ep))):
-                    obj,details=_actor_critic_loss(model,group)
+                    obj,details=_actor_critic_loss(model,group,entropy_weight=a.entropy)
                     record['loss']=checked_step(obj)
                     record['optimizer_added']+=1
                     record['replay_added']=record.get('replay_added',0)+sum(len(e) for e in group)
@@ -610,6 +700,17 @@ def main(argv=None):
                           gpu_peak_memory=int(torch.cuda.max_memory_allocated()) if a.device=='cuda' else 0)
             stopping=budget()>=a.max_moves or stop_requested or (a.stop_after_moves is not None and
                                                                  budget()>=a.stop_after_moves)
+            if stopping and a.method=='calibrate':
+                quality=_calibration_validation(model)
+                ev=quality['explained_variance']
+                quality['min_explained_variance']=a.min_calibration_ev
+                quality['passed']=bool(ev is not None and np.isfinite(ev)
+                                       and ev >= a.min_calibration_ev)
+                calibration_quality=quality
+                record['calibration_quality']=quality
+                print('CALIBRATION_GATE',json.dumps(quality),flush=True)
+            if getattr(a,'source_calibration_warning',None):
+                record['calibration_warning']=a.source_calibration_warning
             if stopping or budget()-counters['last_validate']>=a.validate_every:
                 record['validation']=evaluate_greedy(model,[10,20,30],a.validation_count)
                 counters['last_validate']=budget()

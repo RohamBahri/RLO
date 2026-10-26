@@ -98,3 +98,12 @@ python -m rlo.wave4_report --root "$SCRATCH/RLO_runs/campaign_wave4" \
 Completing these training runs is **not** itself evidence of improvement: the
 comparisons to historical controls, per-instance validation, feasibility,
 resource use, and method fidelity require separate analysis.
+
+## Review correction supersession (October 26)
+
+The section **above** is retained as an implementation-history snapshot, including
+its **superseded** simulation-budget definition and no-longer-current operational
+warnings. The authoritative corrected algorithm, budget axis, seed-matched
+GVF shortlisting, entropy control, calibration gate, SHA-verified source
+transfer, and Fir launch safeguards are in **`docs/WAVE4_REVIEW_FIXES.md`**.
+Do not interpret the earlier budget paragraphs as current preregistration.

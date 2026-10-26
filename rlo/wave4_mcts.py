@@ -14,8 +14,8 @@ from .wave2_replay import Snapshot
 
 @dataclass
 class SearchStats:
-    edges: int = 0               # physical moves simulated, including forced moves
-    traversals: int = 0          # previously expanded tree edges traversed
+    edges: int = 0               # NEW physical moves simulated (including forced moves)
+    traversals: int = 0          # cached tree moves walked again (not new simulation)
     expansions: int = 0
     model_calls: int = 0         # batches passed to network
     network_states: int = 0      # rows evaluated by network
@@ -223,9 +223,8 @@ def search_many(model, trees, simulations=32, *, leaf_type="value"):
                 exists = action in node.children
                 child, r = _expand_child(node, action, stats)
                 if exists:
-                    # Replaying a known tree edge costs no new neural inference,
-                    # but must still be charged as a simulated physical move.
-                    stats.edges += node.edges[action][1]
+                    # Cached traversal is search work, not a newly simulated
+                    # physical transition. Charge it only to the traversal axis.
                     stats.traversals += node.edges[action][1]
                 path.append((node, action, r))
                 node = child
