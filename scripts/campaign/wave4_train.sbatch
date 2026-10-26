@@ -60,17 +60,8 @@ fi
 if [[ "${RLO_RESUME:-0}" == 1 ]]; then
   args+=(--resume)
 else
-  # A real CUDA training collection, NOT merely a CUDA device presence check.
-  # Same architecture, full n=30 and batch=16, method-specific rollout/search.
-  smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/rlo_w4_${method}.XXXXXXXX")"
-  trap 'rm -rf "$smoke_dir"' EXIT
-  srun --cpu-bind=cores python -m rlo.wave4_train --method "$method" --seed "$seed" \
-    --sizes 30 --batch 16 --simulations 32 --device cuda --out "$smoke_dir" \
-    --validate-every 100000000 --checkpoint-every 100000000 \
-    --validation-count 2 --stop-after-moves 1 "${args[@]}"
-  echo "WAVE4_GPU_PREFLIGHT_OK method=$method seed=$seed"
-  rm -rf "$smoke_dir"
-  trap - EXIT
+  echo "No separate HPC smoke run. The first production update performs the CUDA gate."
+
 fi
 srun --cpu-bind=cores python -m rlo.wave4_train --method "$method" --seed "$seed" \
   --batch 16 --device cuda --out "$out" "${args[@]}"

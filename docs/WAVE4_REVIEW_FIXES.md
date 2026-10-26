@@ -28,7 +28,7 @@ This leaves **all prior probability outside S unchanged** and preserves total sh
 ## Fir operational safeguards (scripts included; NO Fir jobs launched)
 
 - Source SHA and clean-tracked-worktree guards; per-run `commit.txt`, exact resume with matching stamp, and no overwrite of existing run directories.
-- Fail-closed check for an activated Fir virtual environment; CUDA one-update preflight is contained **within the same allocation as a production run**, not a separately submitted training job. Do not run it until the user's desired local validation has passed and launch has been explicitly approved.
+- Fail-closed check for an activated Fir virtual environment; No separate Fir smoke or sacrificial one-update training run is included. The **first actual CUDA optimizer update of each production job** is treated as its CUDA operational gate: optimizer and gradient-finiteness checks run as part of the substantive experiment, and a success marker is printed. This respects the instruction not to spend cluster allocations on smoke testing. GPU-specific behavior remains unverified until a production run is authorized.
 - Slurm notification changed to `--signal=USR1@900` because all search methods checkpoint after a complete training collection.
 - The 25M POMO checkpoints are **not assumed to be on Fir**. Transfer the three original Narval source files outside running job directories, record SHA-256 on Narval, copy them to an independently verified Fir path, and export `RLO_POMO_S0/S1/S2` and `RLO_POMO_SHA256_0/1/2`. Calibration refuses wrong/missing hashes and records the source digest in its checkpoint configuration.
 

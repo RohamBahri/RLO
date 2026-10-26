@@ -689,6 +689,14 @@ def main(argv=None):
             counters['search_traversals']+=record.get('search_traversals',0)
             counters['episodes']+=len(cases)
             counters['iteration']+=1
+            if a.device=='cuda' and counters['iteration']==1:
+                if not torch.cuda.is_available():
+                    raise RuntimeError('CUDA disappeared during first training collection')
+                if record['optimizer_added'] < 1 and a.method != 'self_imitation':
+                    raise RuntimeError('First CUDA collection did not perform an optimizer update')
+                torch.cuda.synchronize()
+                print('WAVE4_FIRST_REAL_CUDA_UPDATE_OK',a.method,
+                      'updates=',record['optimizer_added'],flush=True)
             counters['train_seconds']+=time.perf_counter()-t0
             record.update(iteration=counters['iteration'],real_moves=counters['real_moves'],
                           simulated_moves=counters['synthetic_moves'],

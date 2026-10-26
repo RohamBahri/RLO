@@ -54,15 +54,8 @@ flags=()
 if [[ "${RLO_RESUME:-0}" == 1 ]]; then
   flags+=(--resume)
 else
-  smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/rlo_w4_calibration.XXXXXXXX")"
-  trap 'rm -rf "$smoke_dir"' EXIT
-  srun --cpu-bind=cores python -m rlo.wave4_train --method calibrate --seed "$seed" \
-    --initial-checkpoint "$anchor" --expected-initial-moves 25000000 \
-    --max-moves 1000000 --stop-after-moves 1 --batch 16 --sizes 30 \
-    --validate-every 100000000 --validation-count 2 --device cuda --out "$smoke_dir"
-  echo "WAVE4_CALIBRATION_GPU_PREFLIGHT_OK seed=$seed"
-  rm -rf "$smoke_dir"
-  trap - EXIT
+  echo "No separate HPC smoke run. The first production update performs the CUDA gate."
+
 fi
 srun --cpu-bind=cores python -m rlo.wave4_train --method calibrate --seed "$seed" \
   --initial-checkpoint "$anchor" --expected-initial-moves 25000000 \
