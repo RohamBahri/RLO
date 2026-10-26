@@ -110,6 +110,8 @@ def parse_args(argv=None):
     p.add_argument("--auxiliary", action="store_true")
     p.add_argument("--aux-weight", type=float, default=0.1)
     p.add_argument("--sizes", nargs="+", type=int, default=[10, 20, 30])
+    p.add_argument("--eval-sizes", nargs="+", type=int, default=[10, 20, 30],
+                   help="shared evaluation grid, independent of training sizes")
     p.add_argument("--capacity-factors", nargs=2, type=float, default=[.75, 1.25])
     p.add_argument("--demand-maxes", nargs="+", type=int, default=[10])
     p.add_argument("--batch", type=int, default=16)
@@ -142,7 +144,7 @@ def parse_args(argv=None):
     p.add_argument("--stop-after-moves", type=int, default=None,
                    help="stop and checkpoint early for a reproducible interruption test")
     a = p.parse_args(argv)
-    if (a.batch < 1 or min(a.sizes) < 2 or min(a.demand_maxes) < 1 or
+    if (a.batch < 1 or min(a.sizes) < 2 or min(a.eval_sizes) < 2 or min(a.demand_maxes) < 1 or
         not 0 < a.capacity_factors[0] <= a.capacity_factors[1] or
         a.width < 8 or a.width % a.heads or a.max_moves < 1 or
         a.checkpoint_every_moves < 1 or a.validate_every_moves < 1 or
@@ -364,7 +366,7 @@ def main(argv=None):
             stopping = budget() >= a.max_moves or stop_requested or (
                 a.stop_after_moves is not None and budget() >= a.stop_after_moves)
             if stopping or budget() - counters["last_validation_moves"] >= a.validate_every_moves:
-                record["validation"] = evaluate_greedy(model, a.sizes, a.validation_count)
+                record["validation"] = evaluate_greedy(model, a.eval_sizes, a.validation_count)
                 counters["last_validation_moves"] = budget()
             log.write(json.dumps(record) + "\n")
             log.flush()
