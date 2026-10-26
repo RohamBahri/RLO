@@ -198,3 +198,24 @@ def test_pomo_matches_original_wave1_update():
     assert moves + forced_prefix == original["transitions"]
     for key, tensor in old.state_dict().items():
         torch.testing.assert_close(tensor, new.state_dict()[key], atol=1e-5, rtol=1e-5)
+
+
+def test_shared_validation_grid_and_sealed_test(tmp_path):
+    run = _run(_args("ppo", tmp_path / "training"))
+    assert run.returncode == 0, run.stderr
+    weights = tmp_path / "training" / "policy.pt"
+    out = tmp_path / "grid.json"
+    cmd = [sys.executable, "-m", "rlo.wave3_eval", "--checkpoint", str(weights),
+           "--sizes", "4", "6", "--count", "2", "--k", "1", "2",
+           "--device", "cpu", "--out", str(out)]
+    check = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
+                           env=dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1"))
+    assert check.returncode == 0, check.stdout + check.stderr
+    rows = json.loads(out.read_text())
+    assert len(rows) == 4
+    assert all(r["feasibility_rate"] == 1. for r in rows)
+    assert all(len(r["instances"]) == 2 for r in rows)
+    blocked = subprocess.run(cmd + ["--split", "test"], capture_output=True, text=True,
+                             env=dict(os.environ, OMP_NUM_THREADS="1"))
+    assert blocked.returncode != 0
+    assert "sealed" in blocked.stderr
