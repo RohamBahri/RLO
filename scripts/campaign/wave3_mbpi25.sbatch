@@ -58,7 +58,8 @@ if [[ ${#resume[@]} -eq 0 ]]; then
   smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/mbpi_preflight.XXXXXXXX")"
   trap 'rm -rf "$smoke_dir"' EXIT
   srun --cpu-bind=cores python -m rlo.wave3_train \
-    --method mbpi --initial-checkpoint "$anchor" --sizes 30 --eval-sizes 30 \
+    --method mbpi --initial-checkpoint "$anchor" --expected-initial-moves 25000000 \
+    --sizes 30 --eval-sizes 30 \
     --batch 16 --mbpi-roots "$roots" --mbpi-rollouts "$rollouts" \
     --seed "$seed" --device cuda --lr 0.0001 \
     --max-moves 25000000 --stop-after-moves 1 \
@@ -69,7 +70,7 @@ if [[ ${#resume[@]} -eq 0 ]]; then
   trap - EXIT
 fi
 srun --cpu-bind=cores python -m rlo.wave3_train \
-  --method mbpi --initial-checkpoint "$anchor" \
+  --method mbpi --initial-checkpoint "$anchor" --expected-initial-moves 25000000 \
   --sizes 10 20 30 --batch 16 --seed "$seed" --device cuda \
   --lr 0.0001 --mbpi-roots "$roots" --mbpi-rollouts "$rollouts" --mbpi-eta 0.2 \
   --max-moves 25000000 --validate-every-moves 1250000 \
