@@ -191,6 +191,7 @@ def main(argv=None):
     for key in ("resume", "stop_after_moves"):
         config[key] = None
     config["out"] = str(directory)
+    config["parameter_count"] = sum(p.numel() for p in model.parameters())
     counters = dict(iteration=0, real_moves=0, synthetic_moves=0, optimizer_updates=0,
                     replay_decisions=0, episodes=0, train_seconds=0., elapsed_seconds=0.,
                     last_validation_moves=0, last_checkpoint_moves=0)
@@ -362,6 +363,7 @@ def main(argv=None):
                           replay_decisions=counters["replay_decisions"],
                           episodes=counters["episodes"],
                           train_seconds=counters["train_seconds"],
+                          cuda_peak_bytes=int(torch.cuda.max_memory_allocated()) if a.device == "cuda" else 0,
                           elapsed_seconds=counters["elapsed_seconds"] + time.perf_counter() - started)
             stopping = budget() >= a.max_moves or stop_requested or (
                 a.stop_after_moves is not None and budget() >= a.stop_after_moves)
