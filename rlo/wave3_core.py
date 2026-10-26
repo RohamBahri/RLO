@@ -83,9 +83,9 @@ def trajectories(model, envs, *, grad=False, temperature=1., greedy=False,
         for e in envs:
             if not e.done or e.infeasible:
                 raise AssertionError("uncompleted/infeasible policy rollout")
-            # A restored root has zero preceding cost; regular cases have all
-            # distance since the depot. Both undergo independent verification.
-            if initial[envs.index(e)] == 1 and e.tour[0] == 0:
+            # Complete ordinary episodes (including POMO forced starts) must
+            # agree with independent tour-cost verification.
+            if e.tour[0] == 0:
                 e.finish()
     moves = sum(len(e.tour) - initial[i] for i, e in enumerate(envs))
     return traces, envs, moves
@@ -188,7 +188,7 @@ def policy_objective(model, traces, envs, method, lam=.95, aux_weight=0.,
         auxiliary=float(aux_loss.detach()), entropy=float(entropy.detach()))
 
 
-def ppo_update(model, optimizer, traces, *, epochs=4, minibatch=64,
+def ppo_update(model, optimizer, traces, *, epochs=4, minibatch=64, temperature=1.,
                clip=.2, lam=.95, value_weight=.5, entropy_weight=.01, aux_weight=0.):
     """Clipped PPO and GAE. Old action probabilities/advantages remain frozen."""
     rows = [(s, float(a)) for seq in traces for s, a in zip(seq, advantages(seq, lam))]
@@ -204,7 +204,7 @@ def ppo_update(model, optimizer, traces, *, epochs=4, minibatch=64,
     if model.auxiliary_enabled:
         # Auxiliary truth may be computed from the same actual trajectory.
         lookup = {id(s): lab for seq in traces for s, lab in
-                  zip(seq, future_targets(seq, len(seq[0]["before"].visited)-1))}
+                  zip(seq, future_targets(seq, n=len(seq[0]["before"].visited)-1))}
         extra = torch.tensor([lookup[id(s)] for s, _ in rows], device=device)
     stats, updates = [], 0
     for _ in range(epochs):
@@ -216,7 +216,7 @@ def ppo_update(model, optimizer, traces, *, epochs=4, minibatch=64,
             node, glob, dist, mask = [torch.as_tensor(x, device=device) for x in sample]
             enc = model.encode(node, dist)
             logits, value = model.decode(enc, node, glob, mask)
-            distribution = Categorical(logits=logits)
+            distribution = Categorical(logits=logits / temperature)
             act = torch.tensor([rows[i][0]["action"] for i in indices], device=device)
             lp = distribution.log_prob(act)
             ratio = (lp - old_logp[batch]).exp()
@@ -242,8 +242,6 @@ def ppo_update(model, optimizer, traces, *, epochs=4, minibatch=64,
 
 def critic_only_update(model, optimizer, traces):
     """Synthetic Monte-Carlo critic fit: only the value head's weights change."""
-    rows = [(s, ret) for seq in traces for s, ret in zip(
-        seq, reversed(np.cumsum([x["reward"] for x in seq][::-1]).tolist()[::-1]))]
     # Use explicit reverse sum; no solver-generated target.
     rows = []
     for seq in traces:
