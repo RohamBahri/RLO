@@ -22,3 +22,59 @@ This **overlay** adds `rlo/wave4_mcts.py`, `rlo/wave4_vtrace.py`, and `rlo/wave4
 - No built-in Wave 5 constraint environment, exact `Q^pi` diagnostic, or full beam-search benchmark is part of this initial overlay. They must not be represented as complete.
 
 - The inference module includes greedy, independent sampling, all-start, completion-scored beam, **perturbed beam heuristic** (NOT canonical stochastic beam sampling), MCTS, and certified exact residual handoff. Exact `Q^pi` dynamic-programming diagnostics are implemented in `wave4_diag.py` for n <= 10; full projection-error experiments and matched-time PyVRP benchmarking are not yet implemented.
+
+## Installation and execution
+
+Use this branch as a **new checkout/worktree**, not by modifying the branches
+used for the current Wave 3 jobs:
+
+```bash
+git fetch origin research/wave4-search-vtrace-20261026
+git worktree add ~/RLO_wave4 origin/research/wave4-search-vtrace-20261026
+cd ~/RLO_wave4
+mkdir -p logs
+source ~/venvs/rlo/bin/activate
+python -m compileall -q rlo scripts
+OMP_NUM_THREADS=1 pytest -q tests/test_wave4_core.py tests/test_wave4_smoke.py
+```
+
+A run must pass the CPU integration tests and a real H100 preflight before
+submitting the substantive GPU array. The scripts expect the environment
+variable `RLO_WAVE4_SHA` to equal the fully vetted immutable branch commit,
+and the three Wave-1 POMO 25M milestone checkpoints at the documented paths.
+Submit the three calibration jobs and verify they reached their 1M fresh-move
+budget. Only then submit `scripts/campaign/wave4_train.sbatch` as the 33-arm
+array. Do not submit before verifying Fir's 24-hour limits and real CUDA
+throughput; the scripts deliberately do not edit the old Wave 3 worktrees.
+
+Example (after testing, and after exporting the actual pinned SHA):
+
+```bash
+sbatch --export=ALL,RLO_WAVE4_SHA scripts/campaign/wave4_calibrate.sbatch
+# After successful calibration:
+sbatch --export=ALL,RLO_WAVE4_SHA scripts/campaign/wave4_train.sbatch
+```
+
+A Slurm signal triggers an orderly checkpoint at the next completed collection.
+A later launch must explicitly set `RLO_RESUME=1`, use the **same SHA**, and
+point to the same run directory. A task reaching the wall-time limit is not a
+successful completed run: inspect the last checkpoint's `counters` and compare
+its `real_moves + synthetic_moves` or `real_moves` with `max_moves`.
+
+## Validation and outstanding engineering gates
+
+`pytest` contains core mathematical/unit tests and 12 one-collection CPU
+integration checks for the methods, plus an interrupted/resumed V-trace check.
+These tests establish mechanical correctness only, never training performance.
+
+Before claiming the 33 jobs are cluster-ready, run a representative A100/H100
+preflight at `batch=16, n=30, S=32`, confirm that checkpoints resume exactly,
+measure throughput and GPU memory, and check the fixed validation metric against
+the existing Wave-1/3 implementation. These cluster preflights are not available
+from the current runtime and cannot be inferred from the passing CPU tests.
+
+Methods needing more work for the *complete* historical research program:
+faithful original GVF-CAPI definition/source recovery; canonical stochastic
+beam (we provide a named `perturbed_beam` heuristic instead); the full
+projection/continuation-bias decomposition for MBPI; and matched-time classical
+reference generation. Those are not silently counted as complete.

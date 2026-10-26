@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --gpus-per-node=h100:1
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --array=0-32%2
 #SBATCH --signal=USR1@180
 #SBATCH --output=logs/%x_%A_%a.out

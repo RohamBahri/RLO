@@ -64,21 +64,48 @@ def _count_physical(env, before):
     return len(env.tour) - before
 
 
+def _batch_policy_episodes(model, envs, rng, *, greedy=False):
+    """Vectorized own-policy experience; cache one encoding per unique instance."""
+    if not envs:raise ValueError('empty rollout batch')
+    dev=next(model.parameters()).device
+    records=[[] for _ in envs]
+    physical=0
+    unique,ids,lookup=[],[],{}
+    for i,e in enumerate(envs):
+        key=id(e.instance)
+        if key not in lookup:
+            lookup[key]=len(unique);unique.append(i)
+        ids.append(lookup[key])
+    with torch.no_grad():
+        obs=[envs[i].observe() for i in unique]
+        nodes=torch.as_tensor(np.stack([o[0] for o in obs]),device=dev)
+        distances=torch.as_tensor(np.stack([o[2] for o in obs]),device=dev)
+        static=model.encode(nodes,distances)[torch.as_tensor(ids,device=dev)]
+        while True:
+            active=[i for i,e in enumerate(envs) if not e.done]
+            if not active:break
+            snaps=[Snapshot.take(envs[i]) for i in active]
+            current=[envs[i].observe() for i in active]
+            node=torch.as_tensor(np.stack([o[0] for o in current]),device=dev)
+            glob=torch.as_tensor(np.stack([o[1] for o in current]),device=dev)
+            mask=torch.as_tensor(np.stack([o[3] for o in current]),device=dev)
+            logits,_=model.decode(static[active],node,glob,mask)
+            probs=logits.softmax(-1).cpu().numpy()
+            for j,i in enumerate(active):
+                row=probs[j]
+                action=int(row.argmax()) if greedy else int(rng.choice(len(row),p=row))
+                before=len(envs[i].tour)
+                reward,done=envs[i].step(action)
+                physical+=len(envs[i].tour)-before
+                records[i].append(dict(before=snaps[j],action=action,
+                    behavior_logp=float(np.log(max(row[action],1.e-40))),
+                    reward=float(reward),done=done))
+    return records,physical
+
+
 def _policy_episode(model, env, rng, *, greedy=False):
-    """Collect one *complete* actor behavior trajectory; no autograd graph."""
-    rows, physical = [], 0
-    while not env.done:
-        snap = Snapshot.take(env)
-        with torch.no_grad():
-            (logits, _), _ = policy_tensors(model, [snap])
-            prob = logits.softmax(-1).cpu().numpy()[0]
-        action = int(prob.argmax()) if greedy else int(rng.choice(len(prob), p=prob))
-        before = len(env.tour)
-        reward, done = env.step(action)
-        physical += _count_physical(env, before)
-        rows.append(dict(before=snap, action=action, behavior_logp=float(np.log(prob[action])),
-                         reward=float(reward), done=done))
-    return rows, physical
+    episodes,physical=_batch_policy_episodes(model,[env],rng,greedy=greedy)
+    return episodes[0],physical
 
 
 def _searched_episodes(model, envs, rng, *, simulations=32, leaf_type='value',
@@ -159,21 +186,20 @@ def _imitation_loss(model, episodes, *, value_weight=.5):
 
 
 def _sample_q(model, root, actions, rng, rollouts):
-    """Evaluate selected root actions using own simulator completions only."""
-    out, used, calls = {}, 0, 0
+    """Independent counterfactual branches, batched across root actions."""
+    envs=[];labels=[];moves=0
     for action in actions:
-        costs = []
         for _ in range(rollouts):
-            e = root.restore()
-            before = len(e.tour)
-            e.step(int(action))
-            used += len(e.tour) - before
-            _, suffix_moves = _policy_episode(model, e, rng)
-            used += suffix_moves
-            costs.append(e.cost)
-            calls += 1
-        out[int(action)] = np.asarray(costs, dtype=np.float64)
-    return out, used, calls
+            env=root.restore()
+            before=len(env.tour)
+            env.step(int(action))
+            moves+=len(env.tour)-before
+            envs.append(env);labels.append(int(action))
+    _,suffix=_batch_policy_episodes(model,envs,rng)
+    moves+=suffix
+    out={int(a):[] for a in actions}
+    for action,env in zip(labels,envs):out[action].append(env.cost)
+    return {a:np.asarray(v,dtype=np.float64) for a,v in out.items()},moves,len(envs)
 
 
 def _gvf_update(model, gvf, optimizer, episodes, rng, blend=False, *, rollouts=4, topk=4,
@@ -240,35 +266,31 @@ def _gvf_update(model, gvf, optimizer, episodes, rng, blend=False, *, rollouts=4
 
 
 def _self_imitation(model, optimizer, cases, rng, *, k=16):
-    dev = next(model.parameters()).device
-    chosen, weights, fresh, simulated = [],[],0,0
-    for inst in cases:
-        episodes, costs = [], []
-        for j in range(k):
-            e = CVRPEnv(inst)
-            rows, moves = _policy_episode(model, e, rng)
-            episodes.append(rows)
-            costs.append(e.cost)
-            if j==0: fresh += moves
-            else: simulated += moves
-        best = int(np.argmin(costs))
-        advantage = (float(np.mean(costs)) - costs[best]) / np.sqrt(len(inst['demands'])-1)
-        chosen.append(episodes[best]);weights.append(max(0., advantage))
+    dev=next(model.parameters()).device
+    all_envs=[CVRPEnv(inst) for inst in cases for _ in range(k)]
+    episodes,moves=_batch_policy_episodes(model,all_envs,rng)
+    fresh=sum(len(e.tour)-1 for e in all_envs[::k])
+    simulated=moves-fresh
+    chosen,weights=[],[]
+    for i,inst in enumerate(cases):
+        costs=[all_envs[i*k+j].cost for j in range(k)]
+        best=int(np.argmin(costs))
+        advantage=(float(np.mean(costs))-costs[best])/np.sqrt(len(inst['demands'])-1)
+        chosen.append(episodes[i*k+best]);weights.append(max(0.,advantage))
     if not any(w>0 for w in weights):
-        return dict(loss=0.,synthetic=simulated,fresh=fresh,updates=0)
-    flat = [s for ep in chosen for s in ep]
-    (logits,_), _ = policy_tensors(model, [s['before'] for s in flat])
-    actions = torch.tensor([s['action'] for s in flat],device=dev)
-    weight = torch.tensor([w for ep,w in zip(chosen,weights) for _ in ep],
-                          dtype=logits.dtype,device=dev)
-    objective = -(logits.log_softmax(-1).gather(1,actions[:,None])[:,0]*weight).sum()/weight.sum().clamp_min(1.)
-    optimizer.zero_grad(set_to_none=True)
-    objective.backward()
-    grad = torch.nn.utils.clip_grad_norm_(model.parameters(),1.)
-    if not torch.isfinite(objective) or not torch.isfinite(grad):
+        return dict(loss=0.,fresh=fresh,synthetic=simulated,updates=0)
+    flat=[s for ep in chosen for s in ep]
+    (logits,_),_=policy_tensors(model,[s['before'] for s in flat])
+    acts=torch.tensor([s['action'] for s in flat],device=dev)
+    weights=torch.tensor([w for ep,w in zip(chosen,weights) for _ in ep],
+                         dtype=logits.dtype,device=dev)
+    obj=-(logits.log_softmax(-1).gather(1,acts[:,None])[:,0]*weights).sum()/weights.sum().clamp_min(1.)
+    optimizer.zero_grad(set_to_none=True);obj.backward()
+    grad=torch.nn.utils.clip_grad_norm_(model.parameters(),1.)
+    if not torch.isfinite(obj) or not torch.isfinite(grad):
         raise FloatingPointError('nonfinite self imitation')
     optimizer.step()
-    return dict(loss=float(objective.detach()),fresh=fresh,synthetic=simulated,updates=1)
+    return dict(loss=float(obj.detach()),fresh=fresh,synthetic=simulated,updates=1)
 
 
 def _calibration_update(model, opt, episodes):
@@ -477,10 +499,8 @@ def main(argv=None):
             n=len(cases[0]['demands'])-1
             record=dict(n=n,loss=None,optimizer_added=0,fresh_added=0,simulated_added=0)
             if a.method=='calibrate':
-                episodes=[]
-                for case in cases:
-                    ep,moves=_policy_episode(model,CVRPEnv(case),rng)
-                    episodes.append(ep);record['fresh_added']+=moves
+                episodes,moves=_batch_policy_episodes(model,[CVRPEnv(c) for c in cases],rng)
+                record['fresh_added']=moves
                 record['loss']=_calibration_update(model,opt,episodes)
                 record['optimizer_added']=1
             elif a.method in {'az','az_rollout','vtrace_mcts','az_scratch'}:
@@ -513,11 +533,9 @@ def main(argv=None):
                               simulated_added=result['synthetic'],
                               optimizer_added=result['updates'])
             elif a.method in {'offpolicy','recent_vtrace'}:
-                ep=[]
-                for case in cases:
-                    rows,moves=_policy_episode(model,CVRPEnv(case),rng)
-                    ep.append(rows);record['fresh_added']+=moves
-                    replay.append(rows)
+                ep,moves=_batch_policy_episodes(model,[CVRPEnv(c) for c in cases],rng)
+                record['fresh_added']=moves
+                for rows in ep:replay.append(rows)
                 # Match replay gradient exposure for both arms. S1c samples
                 # only current trajectories, with replacement; S1 uses history.
                 sample_count=2*len(ep)
