@@ -23,7 +23,7 @@ This leaves **all prior probability outside S unchanged** and preserves total sh
 
 - Entropy regularization is explicit `--entropy`, default **0** for matched comparisons. Opt-in entropy must be reported as a changed configuration.
 - The policy/value model's POMO anchor has an **untrained value head**. Three seed-specific 1M-fresh-move `calibrate` jobs freeze the policy and fit the value head using its *own* sampled returns. They log a fixed, held-out set of n10/n20/n30 rollout-state value MSE and explained variance plus the declared gate, `--min-calibration-ev 0.0`. Calibration states and returns are **diagnostics only**, never used for critic training. The gate is a warning, not an automatic exclusion: all value-leaf methods remain in the study but are flagged if it fails. Held-out rollout targets are noisy samples, not exact `V^pi`.
-- Calibrated checkpoints save these metrics. Warm-start source quality warnings are logged. New seed matched warm starts must be calibrated and use the same model/seed and SHA-pinned source.
+- Calibrated checkpoints save these metrics. A warm-start job refuses a calibration checkpoint that has not reached its required fresh-move budget; it records a quality warning but does not exclude a fully completed checkpoint whose value gate fails. Warm-start source quality warnings are logged. New seed matched warm starts must be calibrated and use the same model/seed and SHA-pinned source.
 
 ## Fir operational safeguards (scripts included; NO Fir jobs launched)
 

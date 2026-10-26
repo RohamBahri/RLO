@@ -464,6 +464,10 @@ def _initial_model(a):
         if original.get('wave4_version')==1:
             if original.get('method')!='calibrate' or original.get('seed')!=a.seed:
                 raise ValueError('warm source must be same-seed Wave4 calibrated model')
+            source_moves=original.get('counters',{}).get('real_moves',-1)
+            calibration_budget=original.get('config',{}).get('max_moves',-1)
+            if calibration_budget < 1 or source_moves < calibration_budget:
+                raise ValueError('warm source calibration checkpoint is incomplete')
             source=original['model']
             a.source_calibration_quality=original.get('calibration_quality')
             if not a.source_calibration_quality:

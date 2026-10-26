@@ -21,6 +21,8 @@ def test_one_collection_all_arms(tmp_path,monkeypatch,method):
                         transitions_total=25_000_000,model=model.state_dict()),source)
     else:
         torch.save(dict(wave4_version=1,method='calibrate',seed=0,
+                        config={'max_moves':1_000_000},
+                        counters={'real_moves':1_000_000},
                         model=model.state_dict()),source)
     args=['--method',method,'--seed','0','--sizes','4','--batch','2',
           '--max-moves','25','--validate-every','1000000',
