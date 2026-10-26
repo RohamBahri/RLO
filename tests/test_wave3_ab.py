@@ -129,14 +129,20 @@ def test_package_ab_end_to_end_cpu(method, extra, tmp_path):
         assert history[-1]["synthetic_transitions"] > 0
 
 
-def test_resume_exact_policy_and_counters(tmp_path):
+@pytest.mark.parametrize("method,options", [
+    ("ppo", ["--encoder", "mlp"]),
+    ("dyna_critic", []),
+    ("dyna_actor", []),
+    ("pomo", ["--starts", "2", "--auxiliary"]),
+])
+def test_resume_exact_policy_and_counters(method, options, tmp_path):
     full = tmp_path / "full"
     split = tmp_path / "split"
-    x = _run(_args("ppo", full, "--encoder", "mlp"))
+    x = _run(_args(method, full, *options))
     assert x.returncode == 0, x.stderr
-    x = _run(_args("ppo", split, "--encoder", "mlp", "--stop-after-moves", "70"))
+    x = _run(_args(method, split, *options, "--stop-after-moves", "70"))
     assert x.returncode == 0, x.stderr
-    x = _run(_args("ppo", split, "--encoder", "mlp", "--resume", str(split / "last.pt")))
+    x = _run(_args(method, split, *options, "--resume", str(split / "last.pt")))
     assert x.returncode == 0, x.stderr
     a = torch.load(full / "policy.pt", weights_only=True)["model"]
     b = torch.load(split / "policy.pt", weights_only=True)["model"]
