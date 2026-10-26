@@ -55,8 +55,17 @@ if [[ -e "$out" ]]; then
   if [[ "${RLO_RESUME:-0}" == 1 && -f "$out/last.pt" ]]; then
     [[ "$(cat "$out/commit.txt")" == "$RLO_AB_SHA" ]] || exit 2
     resume=(--resume "$out/last.pt")
+  elif [[ "${RLO_RESUME:-0}" != 1 && -f "$out/commit.txt" ]]; then
+    shopt -s nullglob dotglob
+    entries=("$out"/*)
+    shopt -u nullglob dotglob
+    if [[ ${#entries[@]} != 1 || "${entries[0]##*/}" != commit.txt ||
+          "$(cat "$out/commit.txt")" != "$RLO_AB_SHA" ]]; then
+      echo "Nonempty or wrong-source output cannot be restarted: $out"; exit 2
+    fi
+    echo "REUSING_COMMIT_ONLY_DIRECTORY $out"
   else
-    echo "Existing run (not automatically overwritten): $out"; exit 2
+    echo "Existing run; refusing overwrite without valid resume: $out"; exit 2
   fi
 else
   mkdir -p "$out"
