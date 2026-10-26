@@ -42,7 +42,7 @@ if [[ ${#resume[@]} -eq 0 ]]; then
   smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/mbpi_preflight.XXXXXXXX")"
   trap 'rm -rf "$smoke_dir"' EXIT
   srun --cpu-bind=cores python -m rlo.wave3_train \
-    --method mbpi --initial-checkpoint "$anchor" --sizes 30 \
+    --method mbpi --initial-checkpoint "$anchor" --sizes 30 --eval-sizes 30 \
     --batch 4 --mbpi-roots 2 --mbpi-rollouts 2 \
     --seed "$seed" --device cuda --lr 0.0001 \
     --max-moves 25000000 --stop-after-moves 1 \
