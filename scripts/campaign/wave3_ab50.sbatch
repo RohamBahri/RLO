@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=rlo-wave3-ab
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=24:00:00
+#SBATCH --signal=USR1@180
+#SBATCH --array=0-50%2
+#SBATCH --output=logs/%x_%A_%a.out
+set -Eeuo pipefail
+: "${RLO_AB_SHA:?Supply the pinned tested Wave3 SHA}"
+cd "$HOME/RLO_wave3_ab"
+[[ "$(git rev-parse HEAD)" == "$RLO_AB_SHA" ]] || { echo "WRONG_SHA"; exit 2; }
+[[ -z "$(git status --porcelain --untracked-files=no)" ]] || { echo "DIRTY_SOURCE"; exit 2; }
+module load python/3.11
+source "$HOME/venvs/rlo/bin/activate"
+export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export OPENBLAS_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
+
+id="$SLURM_ARRAY_TASK_ID"
+arm=$((id / 3))
+seed=$((id % 3))
+method=pomo
+batch=16
+extras=()
+tag=
+case "$arm" in
+  0) method=ppo; tag=ppo_gae ;;
+  1) method=dyna_critic; tag=dyna_value_mc ;;
+  2) method=dyna_actor; tag=dyna_actor_mc ;;
+  3) tag=encoder_raw; extras=(--encoder raw) ;;
+  4) tag=encoder_mlp; extras=(--encoder mlp) ;;
+  5) tag=encoder_codebook; extras=(--encoder codebook) ;;
+  6) tag=attention_256x4_h8; extras=(--width 256 --layers 4 --heads 8) ;;
+  7) tag=glimpse; extras=(--glimpse) ;;
+  8) tag=dynamic_reencode; extras=(--dynamic-reencode) ;;
+  9) tag=no_distance_bias; extras=(--no-distance-bias) ;;
+  10) tag=multi_value_gvf; extras=(--auxiliary --aux-weight 0.1) ;;
+  11) tag=hierarchy; extras=(--hierarchy) ;;
+  12) tag=train_n20; extras=(--sizes 20) ;;
+  13) tag=capacity_fixed; extras=(--capacity-factors 1.0 1.0) ;;
+  14) tag=temperature_anneal; extras=(--temperature 1.0 --anneal-to 0.5) ;;
+  15) tag=pomo_batch4; batch=4 ;;
+  16) tag=pomo_batch8; batch=8 ;;
+  *) echo "Invalid arm $arm"; exit 2 ;;
+esac
+
+out="$SCRATCH/RLO_runs/campaign_wave3_ab/${tag}_seed${seed}"
+resume=()
+if [[ -e "$out" ]]; then
+  if [[ "${RLO_RESUME:-0}" == 1 && -f "$out/last.pt" ]]; then
+    [[ "$(cat "$out/commit.txt")" == "$RLO_AB_SHA" ]] || exit 2
+    resume=(--resume "$out/last.pt")
+  else
+    echo "Existing run (not automatically overwritten): $out"; exit 2
+  fi
+else
+  mkdir -p "$out"
+  printf '%s\n' "$RLO_AB_SHA" > "$out/commit.txt"
+fi
+
+echo "LAUNCH_SHA=$RLO_AB_SHA ARM=$tag SEED=$seed HOST=$(hostname)"
+# A real training update with the selected method/architecture on an A100.
+if [[ ${#resume[@]} -eq 0 ]]; then
+  smoke_dir="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/rlo_ab_preflight.XXXXXXXX")"
+  trap 'rm -rf "$smoke_dir"' EXIT
+  srun --cpu-bind=cores python -m rlo.wave3_train \
+    --method "$method" --sizes 30 --batch "$batch" --seed "$seed" \
+    --device cuda --max-moves 50000000 --stop-after-moves 1 \
+    --validation-count 2 --checkpoint-every-moves 1 \
+    --validate-every-moves 50000000 --milestones \
+    --out "$smoke_dir" "${extras[@]}"
+  echo "WAVE3_PREFLIGHT_OK $tag seed=$seed"
+  rm -rf "$smoke_dir"
+  trap - EXIT
+fi
+
+srun --cpu-bind=cores python -m rlo.wave3_train \
+  --method "$method" --sizes 10 20 30 --batch "$batch" --seed "$seed" \
+  --device cuda --max-moves 50000000 --validate-every-moves 2500000 \
+  --checkpoint-every-moves 1000000 \
+  --milestones 10000000 25000000 40000000 50000000 \
+  --validation-count 256 --out "$out" \
+  "${extras[@]}" "${resume[@]}"
+echo "FINISHED_OR_PAUSED $tag seed=$seed out=$out"
