@@ -52,19 +52,26 @@ def mbpi_step(model, optimizer, traces, rng, *, roots_per_collection=4,
     for root in roots:
         legal = np.flatnonzero(root.restore().legal())
         q = np.full(len(root.visited), np.inf, dtype=np.float64)
-        for action in legal:
-            costs = []
-            for j in range(0, rollouts_per_action, 64):
-                k = min(64, rollouts_per_action - j)
-                envs = [root.restore() for _ in range(k)]
-                for e in envs:
-                    e.step(int(action))
-                init = [len(e.tour) for e in envs]
-                _, envs, moves = trajectories(model, envs, grad=False, record=False)
-                # Every explicit root action is additional simulated work.
-                synthetic_moves += moves + sum(length - 1 for length in init)
-                rollouts += k
-                costs.extend(float(e.cost) for e in envs)
+        scores = {int(action): [] for action in legal}
+        # Batch independent action branches of the same root. This amortizes
+        # graph encoding over up to 96 rollouts rather than encoding once for
+        # every single action and sample.
+        branches = [int(action) for action in legal
+                    for _ in range(rollouts_per_action)]
+        for offset in range(0, len(branches), 96):
+            selected = branches[offset:offset + 96]
+            envs = [root.restore() for _ in selected]
+            for e, action in zip(envs, selected):
+                e.step(action)
+            init = [len(e.tour) for e in envs]
+            _, envs, moves = trajectories(model, envs, grad=False, record=False)
+            synthetic_moves += moves + sum(length - 1 for length in init)
+            rollouts += len(selected)
+            for action, e in zip(selected, envs):
+                scores[action].append(float(e.cost))
+        for action, costs in scores.items():
+            if len(costs) != rollouts_per_action:
+                raise AssertionError("MBPI rollout count mismatch")
             q[action] = np.mean(costs)
         q_rows.append(q)
     obs = observations(roots)
